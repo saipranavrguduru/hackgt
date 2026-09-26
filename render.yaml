@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: perkpilot-connected
+    runtime: node
+    region: virginia
+    plan: 0.5c-512mb
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:connected
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: perkpilot-connected-db
+          property: connectionString
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: PLAID_ENV
+        value: sandbox
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
+      - key: PLAID_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: SERPAPI_LOCATION
+        value: United States
+      - key: SERPAPI_GL
+        value: us
+      - key: SERPAPI_HL
+        value: en
+databases:
+  - name: perkpilot-connected-db
+    plan: 0.1c-256mb
+    region: virginia
+    ipAllowList: []

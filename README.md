@@ -1,8 +1,12 @@
 # PerkPilot
 
+> For the separate database-backed Plaid, live-listing, and model-backed path, see [CONNECTED.md](CONNECTED.md). The commands below run the original synthetic demo.
+
 Personalized deals from spending patterns, with product research, a shared card/quote engine, explicitly approved simulated checkout, and a ledger of confirmed benefits. Implemented from [PERKPILOT.md](PERKPILOT.md).
 
-This is a **local synthetic financial demo**. No bank, issuer account, shopping search, payment, or reward provider is connected. No money moves. Public card product reward rules are published metadata, not proof of card ownership or individual offer eligibility. Optional nearby-place search uses live OpenStreetMap data, separately from the synthetic financial records.
+The default app is a **local synthetic financial demo**. No bank, issuer account, payment, or reward provider is connected there. No money moves. Public card product reward rules are published metadata, not proof of card ownership or individual offer eligibility. Optional nearby-place search uses live OpenStreetMap data, separately from the synthetic financial records.
+
+The separate [connected app](CONNECTED.md) supports Plaid Sandbox transactions, PostgreSQL storage, Gemini or OpenAI answers, and SerpApi Google Shopping results when their credentials are configured.
 
 ## Run
 
