@@ -1,0 +1,19 @@
+{
+  "name": "perkpilot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Transaction-aware discovery, research and verified savings — local synthetic demo",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js",
+    "test:browser": "node scripts/browser-smoke.js",
+    "build": "node scripts/check.js",
+    "lint": "node scripts/check.js",
+    "typecheck": "node scripts/check.js",
+    "preflight": "node scripts/preflight.js",
+    "demo:reset": "node scripts/reset.js"
+  }
+}

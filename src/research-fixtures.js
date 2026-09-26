@@ -1,0 +1,22 @@
+export function createResearchFixtures(now) {
+  const researchProducts = [
+    { id: 'aero-quiet-4', name: 'Aero Quiet 4', brand: 'Aero', category: 'headphones', description: 'A comfortable flight companion with strong noise cancellation.', batteryHours: 30, weightGrams: 250, anc: 'strong', strengths: ['Strong noise cancellation', 'Lightweight for long flights'], tradeoffs: ['Synthetic owner reports describe warm ear cushions'], compatibility: ['Bluetooth', '3.5 mm wired audio'] },
+    { id: 'studio-go', name: 'Studio Go', brand: 'Studio', category: 'headphones', description: 'An affordable over-ear pair with long battery life.', batteryHours: 50, weightGrams: 265, anc: 'moderate', strengths: ['Lower observed price', 'Long stated battery life'], tradeoffs: ['Moderate cancellation of cabin noise'], compatibility: ['Bluetooth', '3.5 mm wired audio'] },
+    { id: 'horizon-comfort', name: 'Horizon Comfort', brand: 'Horizon', category: 'headphones', description: 'Plush cushions and focused noise cancellation.', batteryHours: 24, weightGrams: 280, anc: 'strong', strengths: ['Strong noise cancellation', 'Comfortable cushions'], tradeoffs: ['Shorter stated battery life than alternatives'], compatibility: ['Bluetooth', '3.5 mm wired audio'] },
+    { id: 'orbit-travel', name: 'Orbit Travel', brand: 'Orbit', category: 'headphones', description: 'A foldable travel pair with a compact carrying case.', batteryHours: 40, weightGrams: 235, anc: 'good', strengths: ['Lightest fixture candidate', 'Compact folding design'], tradeoffs: ['Higher observed price'], compatibility: ['Bluetooth', 'USB-C audio'] },
+  ].map(p => ({ ...p, title: p.name, model: p.name, provenance: 'synthetic', sourceLabel: 'Fictional product · curated research fixture' }));
+  const prices = { 'aero-quiet-4': [29900, 27900], 'studio-go': [17900, 18900], 'horizon-comfort': [29900, 30900], 'orbit-travel': [34900, 34900] };
+  const researchListings = researchProducts.flatMap(p => prices[p.id].map((priceCents, i) => ({ id: `${p.id}-listing-${i + 1}`, productId: p.id, merchantId: i ? 'rei' : 'bestbuy', merchantName: i ? 'REI demo' : 'Best Buy demo', priceCents, currency: 'USD', shippingCents: 0, taxCents: null, availability: 'in_stock', observedAt: now, retrievedAt: now, version: 1, sourceRef: `fixture://listings/${p.id}/${i + 1}`, provenance: 'synthetic' })));
+  const researchSources = researchProducts.flatMap(p => ['manufacturer', 'retailer', 'independent_review', 'community'].map(sourceType => ({ id: `${p.id}-${sourceType}`, productId: p.id, sourceType, publisher: `PerkPilot fictional ${sourceType.replaceAll('_', ' ')} fixture`, sourceRef: `fixture://research/${p.id}/${sourceType}`, retrievedAt: now, publishedAt: now, provenance: 'synthetic', summary: 'Curated fictional evidence for this local demo; no live web research.' })));
+  const researchFacts = researchProducts.flatMap(p => [
+    { id: `${p.id}-battery`, productId: p.id, attribute: 'batteryHours', label: 'Stated battery life', value: p.batteryHours, unit: 'hours', evidenceRefs: [`${p.id}-manufacturer`], confidence: 'fixture_verified', freshness: now, conflicts: p.id === 'aero-quiet-4' ? [{ value: 26, evidenceRefs: [`${p.id}-independent_review`], explanation: 'The fictional review measured 26 hours with ANC; the fictional manufacturer states up to 30 hours.' }] : [] },
+    { id: `${p.id}-weight`, productId: p.id, attribute: 'weightGrams', label: 'Weight', value: p.weightGrams, unit: 'g', evidenceRefs: [`${p.id}-manufacturer`], confidence: 'fixture_verified', freshness: now, conflicts: [] },
+    { id: `${p.id}-anc`, productId: p.id, attribute: 'anc', label: 'Noise cancellation', value: p.anc, evidenceRefs: [`${p.id}-independent_review`], confidence: 'fixture_review', freshness: now, conflicts: [] },
+  ]);
+  const researchFindings = researchProducts.flatMap(p => [
+    ...p.strengths.map((summary, i) => ({ id: `${p.id}-strength-${i}`, productId: p.id, type: 'strength', findingType: 'strength', summary, evidenceRefs: [`${p.id}-${i ? 'manufacturer' : 'independent_review'}`] })),
+    ...p.tradeoffs.map((summary, i) => ({ id: `${p.id}-tradeoff-${i}`, productId: p.id, type: 'tradeoff', findingType: 'tradeoff', summary, evidenceRefs: [`${p.id}-community`] })),
+    { id: `${p.id}-compatibility`, productId: p.id, type: 'compatibility', findingType: 'compatibility', summary: p.compatibility.join(' and '), evidenceRefs: [`${p.id}-manufacturer`] },
+  ]);
+  return { researchProducts, researchListings, researchSources, researchFacts, researchFindings };
+}

@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "PerkPilot · Local Demo",
+  "version": "1.0.0",
+  "description": "Compare your connected cards on two controlled demo storefronts. Click to read a minimal cart and open PerkPilot.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "http://localhost:3001/*",
+    "http://127.0.0.1:3000/*",
+    "http://127.0.0.1:3001/*"
+  ],
+  "action": { "default_title": "Analyze this cart with PerkPilot" },
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://localhost:3000 http://127.0.0.1:3000"
+  }
+}
