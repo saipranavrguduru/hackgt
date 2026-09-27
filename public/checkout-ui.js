@@ -25,11 +25,12 @@
   function mount({root,api,onWalletChanged=()=>{},walletCards=[],cardProducts=[],identity=null,sample=false}) {
     if(!root || typeof api!=='function')throw new Error('Checkout needs a root and portal API.');
     current?.dispose({clearRecovery:false});
-    let alive=true,busy=false,poll=null,capabilities=null,products=[],destinations=[],methods=[],preview=null,intent=null,error='',enrollment=null,authorizationUnknown=pendingApprovals.has(identity);
+    let alive=true,busy=false,loading=true,storeReady=false,setupNotice='',poll=null,capabilities=null,products=[],destinations=[],methods=[],preview=null,intent=null,error='',enrollment=null,authorizationUnknown=pendingApprovals.has(identity);
     const request=(path,method='GET',body)=>api(BASE+path,method,body);
     const productName=id=>cardProducts.find(c=>c.id===id)?.name || walletCards.find(c=>c.productId===id)?.name || String(id||'Wallet card').replaceAll('-',' ');
-    const canBuy=()=>capabilities?.ready===true;
-    const canEnroll=()=>capabilities?.enabled!==false && /^pk_test_/.test(capabilities?.publishableKey||'');
+    const configured=()=>capabilities?.enabled===true && capabilities.ready===true && /^pk_test_/.test(capabilities.publishableKey||'');
+    const canBuy=()=>!sample && configured() && storeReady && products.length>0 && destinations.length>0;
+    const canEnroll=()=>!sample && capabilities?.enabled===true && storeReady && /^pk_test_/.test(capabilities?.publishableKey||'');
     const active=()=>authorizationUnknown || intent && !terminal.has(intent.state);
     const remember=id=>{try{window.localStorage?.setItem(RECOVERY,id);}catch{}};
     const forget=()=>{try{window.localStorage?.removeItem(RECOVERY);}catch{}};
@@ -44,14 +45,42 @@
         root.querySelectorAll?.('[data-checkout-action]').forEach(button=>{button.disabled=busy;});return;
       }
       const missing=arr(capabilities?.missing).join(', ');
-      const readiness=capabilities===null?'Checking test checkout availability…':canBuy()?'Stripe test checkout · Limits enforced by PerkPilot':`Test checkout is not ready${missing?`: ${missing}`:'. Add the provider configuration to enable purchases.'}`;
+      const readiness=sample?'Test checkout requires a registered account':loading?'Checking test checkout availability…':configured()?'Stripe test checkout · Limits enforced by PerkPilot':`Test checkout is not ready${missing?`: ${missing}`:'. Complete the setup below to enable purchases.'}`;
+      const retry=`<button class="button secondary" type="button" data-checkout-action="retry"${disabled(loading)}>Check setup again</button>`;
+      const addCard=`<button class="button secondary" type="button" data-action="add-card"${disabled(active())}>Add a wallet card</button>`;
+      const setupDetails=`<details class="checkout-setup-details"><summary data-checkout-action="setup-details">How to enable test checkout</summary><div><p>In the project’s local <code>.env</code>, set <code>PERKPILOT_CHECKOUT_ENABLED=1</code> and configure <code>CHECKOUT_ORIGIN</code>, <code>DATABASE_URL</code>, <code>STRIPE_SECRET_KEY</code>, <code>STRIPE_PUBLISHABLE_KEY</code>, <code>STRIPE_EXPECTED_ACCOUNT_ID</code>, <code>STRIPE_WEBHOOK_SECRET</code>, and <code>GEMINI_API_KEY</code>. Use Stripe test keys.</p><p>Stop the current development server, then run:</p><pre><code>npm run migrate:checkout\nnpm run seed:checkout\nnpm run preflight:checkout\nnpm run dev:checkout</code></pre><p>Full setup and webhook instructions are in <code>CHECKOUT.md</code> in the repository. After restarting, reload this page or check setup again.</p></div></details>`;
       const publicCard=c=>`${escape(productName(c.productId))} · ${escape(c.brand||'test card')} •••• ${escape(c.last4||'—')}`;
-      const methodList=methods.length?methods.map(c=>`<div class="list-row"><span class="grow"><strong>${publicCard(c)}</strong><p>Test card · reward product selected by you</p></span><button class="text-button" data-checkout-action="remove-method" data-id="${escape(c.id||c.cardId)}"${disabled(active())}>Remove</button></div>`).join(''):'<p class="fine-note">No saved test payment methods. Add a wallet card product, then enroll it below.</p>';
+      const methodList=methods.length?methods.map(c=>`<div class="list-row"><span class="grow"><strong>${publicCard(c)}</strong><p>Test card · reward product selected by you</p></span><button class="text-button" data-checkout-action="remove-method" data-id="${escape(c.id||c.cardId)}"${disabled(active())}>Remove</button></div>`).join(''):`<p class="fine-note">${walletCards.length?'Enroll a wallet card below to save a test payment method.':'Start by adding a wallet card product. Then enroll its test payment method.'}</p>`;
       const choices=walletCards.filter(c=>!methods.some(m=>m.cardId===c.id));
       const summary=preview?`<section class="checkout-permission" aria-label="Purchase permission"><h3>${escape(preview.cart.name||'Test purchase')}</h3><p>${escape(preview.cart.merchantName||'PerkPilot Test Store')} · ${escape(preview.cart.variantId)} · Quantity ${preview.cart.quantity}</p><p>${escape(preview.cart.destinationLabel||'Saved test destination')} · ${escape(preview.cart.shippingOptionId||'standard')} shipping</p><dl class="checkout-amounts"><div><dt>Items</dt><dd>${money(preview.cart.merchandiseCents)}</dd></div><div><dt>Test tax</dt><dd>${money(preview.cart.taxCents)}</dd></div><div><dt>Shipping</dt><dd>${money(preview.cart.shippingCents)}</dd></div><div class="checkout-total"><dt>Current total</dt><dd>${money(preview.cart.totalCents)}</dd></div></dl><p class="fine-note">Choose the best estimated base reward from these enrolled test cards:</p><ul class="checkout-card-set">${arr(preview.cards||preview.eligibleCards).map(c=>`<li>${publicCard(c)} <span>Estimated reward ${money(c.estimatedRewardCents)}</span></li>`).join('')}</ul><p class="fine-note">One purchase. Permission expires in 5 minutes. Item, merchant, destination, shipping service, currency and this card set are fixed.</p>${!intent && !authorizationUnknown?`<form data-checkout-form="buy"><label class="field"><span>Maximum authorized total (USD)</span><input name="maximum" type="text" inputmode="decimal" value="${(preview.cart.totalCents/100).toFixed(2)}" required pattern="[0-9]+([.][0-9]{1,2})?" aria-describedby="checkout-cap-help"${disabled(!canBuy())}></label><p id="checkout-cap-help" class="fine-note">The default is the current total. Enter a larger allowance only if you want to authorize it.</p><button class="button checkout-buy" data-checkout-action="buy"${disabled(!canBuy())}>Buy with PerkPilot — up to ${money(preview.cart.totalCents)}</button></form>`:''}</section>`:'';
       const receipt=intent?.state==='confirmed' && intent.order?.confirmedAt!=null?`<section class="checkout-receipt" data-checkout-receipt><span class="pill">Provider-confirmed test payment</span><h3>Order confirmed</h3><p>${escape(intent.order.merchantName)} · ${money(intent.order.totalCents)}</p><dl class="checkout-amounts"><div><dt>Order</dt><dd>${escape(intent.order.orderId)}</dd></div><div><dt>Payment</dt><dd>${escape(intent.order.paymentId)}</dd></div><div><dt>Selected card</dt><dd>${publicCard(intent.order.card||{})}</dd></div><div><dt>Estimated reward</dt><dd>${money(intent.order.estimatedRewardCents)}</dd></div><div><dt>Permission maximum</dt><dd>${money(intent.maxAmountCents)}</dd></div></dl><p class="fine-note">${escape(intent.order.selectionReason)} Rewards are estimates, not posted benefits or an immediate discount.</p>${arr(intent.order.checks).length?`<p class="fine-note">${escape(intent.order.checks.join(', '))}</p>`:''}</section>`:'';
       const progress=intent?`<section class="checkout-progress" aria-label="Order progress"><h3>${escape(names[intent.state]||'Checking payment status')}</h3><p class="fine-note">Purchase permission maximum ${money(intent.maxAmountCents)}.</p>${arr(intent.events).length?`<ol>${arr(intent.events).map(e=>`<li>${escape(e.tool?({'read_cart':'Checking final cart','rank_cards':'Comparing eligible cards','execute_purchase':'Verifying your limits','get_order_status':'Checking order status'}[e.tool]||e.tool):names[e.state]||e.code||'Checking order status')}</li>`).join('')}</ol>`:''}${['queued','running'].includes(intent.state)?`<button class="button secondary" data-checkout-action="cancel"${disabled(false)}>Cancel before payment</button>`:''}${intent.state==='requires_action'?`<p>Complete your bank’s authentication for this existing test payment.</p><button class="button" data-checkout-action="authenticate"${disabled(false)}>Continue authentication</button>`:''}${['payment_pending','requires_action'].includes(intent.state)?`<p class="fine-note">The payment is still being reconciled. This view cannot establish success until the provider confirms it.</p><button class="text-button" data-checkout-action="reconcile"${disabled(false)}>Check payment status</button>`:''}</section>`:authorizationUnknown?'<section class="checkout-progress"><h3>Checking your existing approval</h3><p>The approval response was interrupted. We’re checking your saved purchase before another purchase can start.</p><button class="button secondary" data-checkout-action="reconcile">Check payment status</button></section>':'';
-      root.innerHTML=`<section class="checkout-panel surface section" aria-labelledby="checkout-title"><div class="section-heading"><div><span class="eyebrow">PerkPilot Test Store</span><h2 id="checkout-title">Buy with PerkPilot</h2><p>A bounded purchase, with your best enrolled test card.</p></div><span class="pill neutral">Test mode</span></div><p class="checkout-readiness fine-note">${escape(readiness)}</p><div class="checkout-message" data-checkout-status role="status" aria-live="polite" tabindex="-1">${escape(status())}</div>${sample?'<p>Create a registered PerkPilot account to enroll a test card and authorize a purchase.</p>':`<div class="checkout-columns"><div><h3>Saved test payment methods</h3>${methodList}${enrollment?'<div class="checkout-enrollment"><p>Enter a Stripe test card. Stripe receives the card number and CVC.</p><div data-checkout-payment></div><div class="checkout-buttons"><button class="button" data-checkout-action="confirm-enrollment">Save test method</button><button class="button secondary" data-checkout-action="close-enrollment">Cancel enrollment</button></div></div>':`<form data-checkout-form="enroll"><label class="field"><span>Wallet reward product</span><select name="walletCardId"${disabled(!canEnroll()||!choices.length||active())}>${choices.map(c=>`<option value="${escape(c.id)}">${escape(c.name||productName(c.productId))}</option>`).join('')}</select></label><label class="checkout-consent"><input name="consent" type="checkbox" required${disabled(!canEnroll()||active())}><span>I agree to save this test payment method for future user-present purchases.</span></label><button class="button secondary" data-checkout-action="enroll"${disabled(!canEnroll()||!choices.length||active())}>Enroll a test card</button></form>`}</div><div><h3>Review your test purchase</h3><form data-checkout-form="preview"><label class="field"><span>Item</span><select name="sku"${disabled(active()||!products.length)}>${products.map(p=>`<option value="${escape(p.sku)}">${escape(p.name)} · ${escape(p.variantId)}</option>`).join('')}</select></label><div class="checkout-form-row"><label class="field"><span>Quantity</span><input name="quantity" type="number" min="1" max="10" value="1" required${disabled(active())}></label><label class="field"><span>Saved test destination</span><select name="destinationId"${disabled(active())}>${destinations.map(d=>`<option value="${escape(d.id)}">${escape(d.label)}</option>`).join('')}</select></label></div><button class="button secondary" data-checkout-action="preview"${disabled(!canBuy()||!methods.length||active())}>Review purchase permission</button></form>${summary}${progress}${receipt}</div></div><p class="checkout-footnote fine-note">This places a controlled test-store order. No external merchant order or real-money purchase is made.</p>`}</section>`;
+      const enrollmentForm=enrollment?'<div class="checkout-enrollment"><p>Enter a Stripe test card. Stripe receives the card number and CVC.</p><div data-checkout-payment></div><div class="checkout-buttons"><button class="button" data-checkout-action="confirm-enrollment">Save test method</button><button class="button secondary" data-checkout-action="close-enrollment">Cancel enrollment</button></div></div>':choices.length?`
+        <form data-checkout-form="enroll">
+          <label class="field"><span>Wallet reward product</span><select name="walletCardId"${disabled(!canEnroll()||active())}>${choices.map(c=>`<option value="${escape(c.id)}">${escape(c.name||productName(c.productId))}</option>`).join('')}</select></label>
+          <label class="checkout-consent"><input name="consent" type="checkbox" required${disabled(!canEnroll()||active())}><span>I agree to save this test payment method for future user-present purchases.</span></label>
+          <button class="button secondary" data-checkout-action="enroll"${disabled(!canEnroll()||active())}>Enroll a test card</button>
+        </form>`:'';
+      const purchaseForm=products.length && destinations.length?`
+        <form data-checkout-form="preview">
+          <label class="field"><span>Item</span><select name="sku"${disabled(active())}>${products.map(p=>`<option value="${escape(p.sku)}">${escape(p.name)} · ${escape(p.variantId)}</option>`).join('')}</select></label>
+          <div class="checkout-form-row"><label class="field"><span>Quantity</span><input name="quantity" type="number" min="1" max="10" value="1" required${disabled(active())}></label><label class="field"><span>Saved test destination</span><select name="destinationId"${disabled(active())}>${destinations.map(d=>`<option value="${escape(d.id)}">${escape(d.label)}</option>`).join('')}</select></label></div>
+          ${!methods.length?'<p class="fine-note">Enroll a test card to review and authorize your purchase.</p>':''}
+          <button class="button secondary" data-checkout-action="preview"${disabled(!canBuy()||!methods.length||active())}>Review purchase permission</button>
+        </form>`:`<p>No test products or destinations are available yet. Run <code>npm run seed:checkout</code> in the project, then check setup again.</p>${retry}`;
+      let content;
+      if(sample)content='<p>Create a registered PerkPilot account to enroll a test card and authorize a purchase.</p>';
+      else if(loading)content='<p>Loading your test store…</p>';
+      else if(!configured())content=`<section class="checkout-setup" data-checkout-setup aria-label="Test checkout setup"><h3>Test checkout needs setup</h3><p>The payment service is not connected yet. You can add wallet card products now; enrollment and purchases become available after setup.</p>${setupDetails}<div class="checkout-buttons">${addCard}${retry}</div></section>${progress}${receipt}`;
+      else if(!storeReady)content=`<section class="checkout-setup"><h3>Could not load your test store</h3><p>Check the error above and try again to load your products and saved payment methods.</p>${retry}</section>${progress}${receipt}`;
+      else content=`<div class="checkout-columns"><div><h3>Saved test payment methods</h3>${methodList}${enrollmentForm}${!enrollment?`<div class="checkout-buttons">${addCard}</div>`:''}</div><div><h3>Review your test purchase</h3>${purchaseForm}${summary}${progress}${receipt}</div></div>`;
+      root.innerHTML=`<section class="checkout-panel surface section" aria-labelledby="checkout-title">
+        <div class="section-heading"><div><span class="eyebrow">PerkPilot Test Store</span><h2 id="checkout-title">Buy with PerkPilot</h2><p>A bounded purchase, with your best enrolled test card.</p></div><span class="pill neutral">Test mode</span></div>
+        <p class="checkout-readiness fine-note">${escape(readiness)}</p>
+        <div class="checkout-message" data-checkout-status role="status" aria-live="polite" tabindex="-1">${escape(status()||setupNotice)}</div>
+        ${content}
+        <p class="checkout-footnote fine-note">This places a controlled test-store order. No external merchant order or real-money purchase is made.</p>
+      </section>`;
     }
     function schedule() {
       clearTimeout(poll);if(!alive || !active())return;
@@ -79,9 +108,32 @@
       try{return await fn();}catch(err){if(alive){error=err.message;render();root.querySelector('[data-checkout-status]')?.focus();}throw err;}
       finally{if(alive){busy=false;render();schedule();}}
     }
+    async function loadSetup() {
+      if(sample){loading=false;render();return;}
+      loading=true;storeReady=false;setupNotice='';capabilities=null;render();
+      try{
+        const value=await request('/capabilities');if(!alive)return;capabilities=value;
+        // Ordinary development mode has no checkout routes beyond capabilities.
+        // Do not request products or methods until that runtime is enabled.
+        if(capabilities.enabled!==true)return;
+        const loaded=await Promise.allSettled([request('/products'),request('/methods')]);if(!alive)return;
+        products=[];destinations=[];methods=[];
+        const failures=[];
+        if(loaded[0].status==='fulfilled'){products=arr(loaded[0].value.products);destinations=arr(loaded[0].value.destinations);}
+        else failures.push(`Could not load test products: ${loaded[0].reason?.message||'Please try again.'}`);
+        if(loaded[1].status==='fulfilled')methods=arr(loaded[1].value.methods||loaded[1].value);
+        else failures.push(`Could not load saved test methods: ${loaded[1].reason?.message||'Please try again.'}`);
+        storeReady=failures.length===0;error=failures.join(' ');
+        const id=recalled();
+        try{await discoverIntent({preferredId:id && /^[A-Za-z0-9_:-]{1,200}$/.test(id)?id:null});}
+        catch(err){if([401,403,404].includes(err.status))forget();else{storeReady=false;error=[error,`Could not check existing purchases: ${err.message}`].filter(Boolean).join(' ');}}
+      }catch(err){if(alive){error=err.code==='NOT_FOUND'?'Test checkout is not enabled. Complete the setup below to start.':err.message;capabilities={ready:false,enabled:false};}}
+      finally{if(alive){loading=false;render();schedule();}}
+    }
     function clearEnrollment() {enrollment?.element?.destroy();enrollment=null;}
     const controller={
       identity,
+      async refreshSetup(){return action(async()=>{await loadSetup();if(alive && !error)setupNotice=configured()?'Test store is up to date.':'Checked again. Test checkout still needs setup.';});},
       async preparePreview(input){return action(async()=>{
         if(!canBuy())throw new Error('Test checkout is not ready.');
         if(active())throw new Error('Finish or cancel your current purchase first.');
@@ -138,26 +190,16 @@
       promise?.catch(()=>{});
     }
     function click(event){const button=event.target.closest?.('[data-checkout-action]');if(!button)return;const name=button.dataset.checkoutAction;
-      if(['buy','preview','enroll'].includes(name))return;
+      if(['buy','preview','enroll','setup-details'].includes(name))return;
       event.preventDefault();event.stopPropagation();let result;
       if(name==='close-enrollment'){clearEnrollment();render();}
       else if(name==='confirm-enrollment')result=controller.confirmEnrollment();else if(name==='authenticate')result=controller.authenticatePayment();
-      else if(name==='cancel')result=controller.cancel();else if(name==='reconcile')result=controller.reconcile();else if(name==='remove-method')result=controller.removeMethod(button.dataset.id);
+      else if(name==='cancel')result=controller.cancel();else if(name==='reconcile')result=controller.reconcile();else if(name==='remove-method')result=controller.removeMethod(button.dataset.id);else if(name==='retry')result=controller.refreshSetup();
       result?.catch(()=>{});
     }
     function input(event){if(event.target.name!=='maximum')return;const button=root.querySelector('[data-checkout-action="buy"]');if(!button)return;try{const max=cents(event.target.value);button.textContent=`Buy with PerkPilot — up to ${money(max)}`;button.disabled=busy||max<preview.cart.totalCents||max>50000;}catch{button.disabled=true;}}
     root.addEventListener('click',click);root.addEventListener('submit',submit);root.addEventListener('input',input);render();current=controller;
-    controller.ready=(async()=>{
-      if(sample)return;
-      try{
-        const value=await request('/capabilities');if(!alive)return;capabilities=value;
-        const loaded=await Promise.allSettled([request('/products'),request('/methods')]);if(!alive)return;
-        if(loaded[0].status==='fulfilled'){products=arr(loaded[0].value.products);destinations=arr(loaded[0].value.destinations);}
-        if(loaded[1].status==='fulfilled')methods=arr(loaded[1].value.methods||loaded[1].value);
-        const id=recalled();if(capabilities.enabled!==false){try{await discoverIntent({preferredId:id && /^[A-Za-z0-9_:-]{1,200}$/.test(id)?id:null});}catch(err){if([401,403,404].includes(err.status))forget();else throw err;}}
-      }catch(err){if(alive){error=err.code==='NOT_FOUND'?'Test checkout is not enabled. Add the provider configuration to start.':err.message;capabilities={ready:false,enabled:false};}}
-      finally{if(alive){render();schedule();}}
-    })();
+    controller.ready=loadSetup();
     return controller;
   }
   window.CheckoutUI={mount,openProduct:sku=>current?.openProduct(sku),dispose:options=>current?.dispose(options)};

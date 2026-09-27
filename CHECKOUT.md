@@ -42,6 +42,8 @@ If the sibling storefront port 3001 is already in use, set `STORE_PORT=3002` (or
 
 Ordinary `npm run dev` and the labeled synthetic profile journey remain available with checkout disabled. Stripe is required only when checkout is explicitly enabled.
 
+If the Test Store says **Test checkout needs setup**, open **How to enable test checkout** for the required configuration and startup commands. **Add a wallet card** works before provider setup. After restarting with `npm run dev:checkout`, reload the page or click **Check setup again**. Product or saved-method loading errors are displayed with a retry action; enrollment and purchase forms appear once their prerequisites are available.
+
 ## Forward signed local webhooks
 
 With an authorized Stripe CLI session, forward the relevant PaymentIntent events to the local checkout route:
@@ -101,6 +103,7 @@ npm test
 npm run build
 node --env-file=.env --test tests/checkout-postgres.test.js
 npm run test:checkout:browser
+npm run test:checkout:setup-browser
 npm run test:integrated:browser
 npm run test:browser
 node --env-file=.env scripts/verify-checkout.js
@@ -116,9 +119,10 @@ Visa Intelligent Commerce and Stripe Shared Payment Tokens are not implemented i
 
 ## Local verification recorded for this change
 
-- `npm test`: 201 passed, zero failures, one explicit skip for missing `TEST_CHECKOUT_DATABASE_URL` (202 total).
-- `npm run build`: 80 JavaScript files passed the repository syntax/static check; this is not TypeScript compilation.
+- `npm test`: 205 passed, zero failures, one explicit skip for missing `TEST_CHECKOUT_DATABASE_URL` (206 total).
+- `npm run build`: 81 JavaScript files passed the repository syntax/static check; this is not TypeScript compilation.
 - Existing synthetic browser journey, registered Explore/Connected journey, and agent checkout browser journey passed with isolated provider fixtures; desktop/mobile screenshots were inspected.
+- Unconfigured Test Store browser coverage passes actual setup, retry, and wallet-onboarding clicks against the ordinary integrated server, plus ready-empty-wallet and failed-catalog recovery fixtures. No payment provider is called by this check.
 - Independent review regressions cover mixed extension/portal credentials, failed-payment normalization, exact-approval recovery, and linked-profile deletion without data resurrection.
 - A separate actual Gemini request using the local configuration returned `AGENT_UNAVAILABLE`; live model execution remains unverified.
 - Stripe keys were deferred by the user. No actual Stripe charge, enrollment, challenge, or webhook delivery was claimed. The verifier records incomplete configuration in its redacted report.

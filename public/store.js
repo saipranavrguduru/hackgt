@@ -82,8 +82,8 @@ function renderProduct() {
   $('product-reference').hidden = !discount;
   $('product-discount').hidden = !discount;
   if (discount) $('product-discount').textContent = `${Math.round((1 - product.priceCents / product.referencePriceCents) * 100)}% off`;
-  $('jacket-art').hidden = nike;
-  $('shoe-art').hidden = !nike;
+  $('jacket-art').toggleAttribute('hidden', nike);
+  $('shoe-art').toggleAttribute('hidden', !nike);
   $('product-visual').classList.toggle('nike', nike);
   $('collection-label').textContent = nike ? 'MADE FOR YOUR NEXT MILE' : 'THE EVERYDAY COLLECTION';
   $('product-category').textContent = nike ? 'RUNNING · EVERYDAY COMFORT' : 'OUTERWEAR · EVERYDAY MOVEMENT';

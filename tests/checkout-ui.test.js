@@ -3,16 +3,18 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-function fixture({ready=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[]}={}) {
+function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false}={}) {
   const requests=[],timers=[],store=new Map(recovered?[['perkpilot-checkout-intent',recovered]]:[]);
   const root={innerHTML:'',addEventListener(){},removeEventListener(){},querySelector(){return null;}};
   const cart={sku:'everyday-headphones',variantId:'black',quantity:1,name:'Headphones <script>evil()</script>',merchantName:'PerkPilot Test Store',currency:'USD',merchandiseCents:9000,taxCents:900,shippingCents:500,totalCents:10400,destinationLabel:'Saved test destination'};
   let release,previewCount=0,approvalCount=0;
+  const capabilities={enabled,ready,publishableKey:ready?'pk_test_ui':null,missing:ready?[]:['Stripe test keys']};
   const api=async(path,method='GET',body)=>{
     requests.push({path,method,body});
-    if(path.endsWith('/capabilities'))return {enabled:true,ready,publishableKey:ready?'pk_test_ui':null,missing:ready?[]:['Stripe test keys']};
+    if(resourceErrors[path])throw new Error(resourceErrors[path]);
+    if(path.endsWith('/capabilities'))return capabilities;
     if(path.endsWith('/products'))return {products:[{...cart,stock:100}],destinations:[{id:'destination',label:'Atlanta test address'}]};
-    if(path.endsWith('/methods')&&method==='GET')return [{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}];
+    if(path.endsWith('/methods')&&method==='GET')return savedMethods;
     if(path.endsWith('/previews'))return {id:lostAfterSuccess?`preview-${++previewCount}`:'preview',cart,cards:[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208}],expiresAt:Date.now()+300000};
     if(path.endsWith('/intents')&&method==='GET')return discovered;
     if(path.endsWith('/intents')&&method==='POST') {approvalCount++;if(delayed)await new Promise(r=>{release=r;});if(lostAfterSuccess&&approvalCount===1){const prior={id:'prior-confirmed',previewId:body.previewId,state:'confirmed',events:[],order:{confirmedAt:Date.now()},maxAmountCents:body.maxAmountCents};discovered.push(prior);return prior;}if(lostAfterSuccess)throw new Error('Response was lost before commit.');if(lostResponse){discovered.push({id:'accepted-intent',previewId:body.previewId,state:'payment_pending'});throw new Error('Response was lost.');}const value={id:'intent',previewId:body.previewId,state:'queued',events:[],order:null,maxAmountCents:body.maxAmountCents};discovered.push(value);return value;}
@@ -28,10 +30,48 @@ function fixture({ready=true,recovered=null,delayed=false,lostResponse=false,los
   const window={Stripe:()=>stripe,localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},location:{href:'http://localhost:3000/#connected'}};
   const context={window,document:{},console,Intl,URL,Date,Promise,queueMicrotask,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){}};
   vm.createContext(context);vm.runInContext(readFileSync(new URL('../public/checkout-ui.js',import.meta.url),'utf8'),context);
-  const ui=window.CheckoutUI.mount({root,api,identity:'alice',walletCards:[{id:'card-a',productId:'active-cash',name:'Active Cash'}]});
+  const ui=window.CheckoutUI.mount({root,api,identity:'alice',walletCards,sample});
   const remount=(identity='alice')=>{const nextRoot={...root,innerHTML:''};const nextUI=window.CheckoutUI.mount({root:nextRoot,api,identity,walletCards:[{id:'card-a',productId:'active-cash',name:'Active Cash'}]});return {ui:nextUI,root:nextRoot};};
-  return {ui,root,requests,timers,store,stripeCalls,discovered,remount,release:()=>release?.()};
+  return {ui,root,requests,timers,store,stripeCalls,discovered,capabilities,resourceErrors,remount,release:()=>release?.()};
 }
+test('disabled checkout provides working setup actions without unusable payment forms or disabled API calls',async()=>{
+  const f=fixture({ready:false,enabled:false});await f.ui.ready;
+  assert.match(f.root.innerHTML,/data-checkout-setup/);
+  assert.match(f.root.innerHTML,/data-checkout-action="setup-details"/);
+  assert.match(f.root.innerHTML,/data-checkout-action="retry"/);
+  assert.match(f.root.innerHTML,/data-action="add-card"/);
+  assert.doesNotMatch(f.root.innerHTML,/data-checkout-form="(?:enroll|preview)"/);
+  assert.deepEqual(f.requests.map(r=>r.path),['/agent-checkout/capabilities']);
+  Object.assign(f.capabilities,{enabled:true,ready:true,publishableKey:'pk_test_ui',missing:[]});
+  await f.ui.refreshSetup();
+  assert.doesNotMatch(f.root.innerHTML,/data-checkout-setup/);
+  assert.match(f.root.innerHTML,/data-checkout-form="preview"/);
+});
+test('a ready checkout with an empty wallet offers adding a card before enrollment',async()=>{
+  const f=fixture({walletCards:[],savedMethods:[]});await f.ui.ready;
+  assert.match(f.root.innerHTML,/data-action="add-card"/);
+  assert.match(f.root.innerHTML,/Add a wallet card/);
+  assert.doesNotMatch(f.root.innerHTML,/data-checkout-form="enroll"/);
+  assert.match(f.root.innerHTML,/Enroll a test card to review/);
+});
+test('store data failures are visible, block previews and can be retried',async()=>{
+  for(const resource of ['products','methods']){
+    const f=fixture({resourceErrors:{[`/agent-checkout/${resource}`]:'Store data unavailable'}});await f.ui.ready;
+    assert.match(f.root.innerHTML,/Store data unavailable/);
+    assert.match(f.root.innerHTML,/data-checkout-action="retry"/);
+    await assert.rejects(f.ui.preparePreview({sku:'everyday-headphones'}),/not ready/i);
+    delete f.resourceErrors[`/agent-checkout/${resource}`];await f.ui.refreshSetup();
+    assert.doesNotMatch(f.root.innerHTML,/Store data unavailable/);
+    await f.ui.preparePreview({sku:'everyday-headphones'});
+    assert.match(f.root.innerHTML,/Purchase permission/);
+  }
+});
+test('sample checkout explains the registered account requirement without an endless loading message',async()=>{
+  const f=fixture({sample:true});await f.ui.ready;
+  assert.match(f.root.innerHTML,/Create a registered PerkPilot account/);
+  assert.doesNotMatch(f.root.innerHTML,/Checking test checkout availability/);
+  assert.equal(f.requests.length,0);
+});
 test('checkout missing test keys shows setup status and cannot authorize',async()=>{
   const f=fixture({ready:false});await f.ui.ready;
   assert.match(f.root.innerHTML,/Stripe test keys/);assert.match(f.root.innerHTML,/Buy with PerkPilot/);

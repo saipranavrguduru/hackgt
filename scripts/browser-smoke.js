@@ -197,27 +197,75 @@ try {
   }
   console.log('PASS: five core screens fit a 390px viewport');
 
-  const store=await context.newPage();await store.goto(`http://localhost:${storePort}/store?product=alo-jacket`);
+  const store=await context.newPage();store.setDefaultTimeout(12000);store.setDefaultNavigationTimeout(12000);
+  store.on('pageerror',error=>errors.push(`Storefront: ${error.message}`));
+  await store.goto(`http://localhost:${storePort}/store?product=alo-jacket`);
   await store.locator('#store-cart[data-cart-id]').waitFor();
-  const revision=await store.locator('#store-cart').getAttribute('data-cart-revision');
-  await store.locator('#increase').click();
-  await store.waitForFunction(previous=>document.getElementById('store-cart').dataset.cartRevision!==previous,revision);
-  assert.equal(await store.locator('#charge-total').innerText(),'$208.00');
+  await store.locator('#nike-link').click();
+  await store.locator('#store-cart[data-product-id="nike-pegasus"]').waitFor();
+  assert.equal(new URL(store.url()).searchParams.get('product'),'nike-pegasus');
+  assert.equal(await store.locator('#product-name').innerText(),'Nike Pegasus Running Shoes');
+  assert.equal(await store.locator('#nike-link').getAttribute('aria-current'),'page');
+  await store.screenshot({path:'test-results/browser/storefront-nike.png',fullPage:true});
+  assert.equal(await store.locator('#shoe-art').isVisible(),true,'Nike merchant navigation must show the shoe artwork');
+  assert.equal(await store.locator('#jacket-art').isVisible(),false,'Nike merchant navigation must hide the jacket artwork');
+  await store.locator('#alo-link').click();
+  await store.locator('#store-cart[data-product-id="alo-jacket"]').waitFor();
+  assert.equal(new URL(store.url()).searchParams.get('product'),'alo-jacket');
+  assert.equal(await store.locator('#product-name').innerText(),'Alo Running Jacket');
+  assert.equal(await store.locator('#alo-link').getAttribute('aria-current'),'page');
+  assert.equal(await store.locator('#jacket-art').isVisible(),true,'Alo merchant navigation must show the jacket artwork');
+  assert.equal(await store.locator('#shoe-art').isVisible(),false,'Alo merchant navigation must hide the shoe artwork');
+  console.log('PASS: storefront merchant links load the selected product and artwork');
+
+  await store.locator('#research-link').click();
+  await store.locator('#sheet[open]').waitFor();
+  assert.equal(new URL(store.url()).origin,base);
+  assert.equal(new URL(store.url()).searchParams.get('research'),'alo-jacket');
+  await store.getByText('Sources & freshness',{exact:true}).waitFor();
+  await store.locator('#sheet[open]').getByText('Alo Running Jacket',{exact:true}).waitFor();
+  await store.goBack();
+  await store.locator('#store-cart[data-product-id="alo-jacket"]').waitFor();
+  console.log('PASS: storefront research link opens the selected product brief');
+
+  const size=store.locator('#sizes').getByRole('button',{name:'S',exact:true});
+  await size.click();
+  await store.locator('#sizes button[aria-pressed="true"]').filter({hasText:/^S$/}).waitFor();
+  assert.equal(await store.locator('#sizes button[aria-pressed="true"]').count(),1);
+  assert.equal(await store.locator('#quantity').innerText(),'1');
+  assert.equal(await store.locator('#decrease').isDisabled(),true);
+  for(const [selector,quantity,total] of [['#increase','2','$208.00'],['#decrease','1','$104.00'],['#increase','2','$208.00']]) {
+    const revision=await store.locator('#store-cart').getAttribute('data-cart-revision');
+    await store.locator(selector).click();
+    await store.waitForFunction(previous=>document.getElementById('store-cart').dataset.cartRevision!==previous,revision);
+    assert.equal(await store.locator('#quantity').innerText(),quantity);
+    assert.equal(await store.locator('#bag-quantity').innerText(),quantity);
+    assert.equal(await store.locator('#charge-total').innerText(),total);
+    assert.equal(await store.locator('#decrease').isDisabled(),quantity==='1');
+    assert.equal(await size.getAttribute('aria-pressed'),'true');
+  }
   await store.screenshot({path:'test-results/browser/storefront.png',fullPage:true});
-  console.log('PASS: controlled storefront quantity updates authoritative cart totals');
-  await page.setViewportSize({width:1440,height:1000});
-  await page.goto(await store.locator('#checkout-link').getAttribute('href'));
-  await page.locator('#sheet[open]').waitFor();await click('[data-action="checkout-review"]');
-  await page.locator('#checkout-form').waitFor();
+  console.log('PASS: storefront size selection and quantity controls update the bag and totals');
+  // Open through the real anchor while keeping the merchant tab alive to test a later cart change.
+  const [checkoutPage]=await Promise.all([context.waitForEvent('page'),store.locator('#checkout-link').click({modifiers:[process.platform==='darwin'?'Meta':'Control']})]);
+  checkoutPage.setDefaultTimeout(12000);checkoutPage.setDefaultNavigationTimeout(12000);
+  checkoutPage.on('pageerror',error=>errors.push(`Storefront checkout: ${error.message}`));
+  await checkoutPage.locator('#sheet[open]').waitFor();
+  assert.equal(new URL(checkoutPage.url()).origin,base);
+  assert.equal(new URL(checkoutPage.url()).searchParams.get('product'),'alo-jacket');
+  await checkoutPage.getByText('$208.00',{exact:true}).first().waitFor();
+  await checkoutPage.locator('[data-action="checkout-review"]').click();
+  await checkoutPage.locator('#checkout-form').waitFor();
+  console.log('PASS: storefront checkout link opens a quote for the current two-item cart');
   const nextRevision=await store.locator('#store-cart').getAttribute('data-cart-revision');
   await store.locator('#increase').click();
   await store.waitForFunction(previous=>document.getElementById('store-cart').dataset.cartRevision!==previous,nextRevision);
-  await page.locator('[name="approved"]').check();await page.locator('#checkout-form [type="submit"]').click();
-  await page.getByText('Your merchant cart changed. Review a fresh quote before approving.',{exact:true}).waitFor();
-  await click('[data-action="refresh-quote"]');
-  await page.getByText('$312.00',{exact:true}).first().waitFor();
-  await click('[data-action="checkout-review"]');
-  assert.equal(await page.locator('[name="approved"]').isChecked(),false);
+  await checkoutPage.locator('[name="approved"]').check();await checkoutPage.locator('#checkout-form [type="submit"]').click();
+  await checkoutPage.getByText('Your merchant cart changed. Review a fresh quote before approving.',{exact:true}).waitFor();
+  await checkoutPage.locator('[data-action="refresh-quote"]').click();
+  await checkoutPage.getByText('$312.00',{exact:true}).first().waitFor();
+  await checkoutPage.locator('[data-action="checkout-review"]').click();
+  assert.equal(await checkoutPage.locator('[name="approved"]').isChecked(),false);
   console.log('PASS: merchant changes reject old approval and refresh requires review of the new $312 total');
 
   const emptyContext=await browser.newContext({viewport:{width:390,height:844},reducedMotion:'reduce'});
