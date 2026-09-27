@@ -5,6 +5,12 @@ export function createDatabase(url = process.env.DATABASE_URL, injectedPool = nu
   if (!url && !injectedPool) throw new Error('DATABASE_URL is required for connected mode.');
   const pool = injectedPool || new Pool({ connectionString: url, max: 5, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000 });
   const query = (sql, params = []) => pool.query(sql, params);
+  async function transaction(fn) {
+    const client=await pool.connect();
+    try{await client.query('BEGIN');const result=await fn({query:(sql,params=[])=>client.query(sql,params)});await client.query('COMMIT');return result;}
+    catch(error){await client.query('ROLLBACK');throw error;}
+    finally{client.release();}
+  }
   async function migrate() {
     await query(`CREATE TABLE IF NOT EXISTS connected_users (
       id uuid PRIMARY KEY, email text NOT NULL UNIQUE, name text NOT NULL,
@@ -13,6 +19,10 @@ export function createDatabase(url = process.env.DATABASE_URL, injectedPool = nu
       created_at timestamptz NOT NULL DEFAULT now()
     )`);
     await query('ALTER TABLE connected_users ADD COLUMN IF NOT EXISTS shopping_location text');
+    await query(`CREATE TABLE IF NOT EXISTS connected_portal_bindings (
+      portal_user_id text PRIMARY KEY,
+      user_id uuid NOT NULL UNIQUE REFERENCES connected_users(id) ON DELETE CASCADE
+    )`);
     await query(`CREATE TABLE IF NOT EXISTS connected_sessions (
       token_hash text PRIMARY KEY, user_id uuid NOT NULL REFERENCES connected_users(id) ON DELETE CASCADE,
       expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
@@ -58,5 +68,5 @@ export function createDatabase(url = process.env.DATABASE_URL, injectedPool = nu
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   }
-  return { pool, query, migrate, saveSync, close: () => pool.end() };
+  return { pool, query, transaction, migrate, saveSync, close: () => pool.end() };
 }

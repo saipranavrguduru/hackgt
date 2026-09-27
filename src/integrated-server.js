@@ -13,7 +13,17 @@ export function createIntegratedApplication(options = {}) {
   const parsed = configuredOrigin ? new URL(configuredOrigin) : null;
   const origin = parsed && !localHost(parsed.hostname) ? parsed.origin : `http://localhost:${port}`;
   const demo = createApplication({ ...(options.demoOptions || {}), port, storePort, origin });
-  const connected = createConnectedApplication({ ...(options.connectedOptions || {}), origin });
+  // Identity comes only from the portal's verified cookie, never client-supplied
+  // headers, email matching, bearer tokens, or a previous connected session.
+  const portalIdentity = req => {
+    const token = req.headers.cookie?.split(';').map(value=>value.trim()).find(value=>value.startsWith('perkpilot_session='))?.slice('perkpilot_session='.length);
+    const session = demo.auth.lookup(token);
+    if (session?.kind !== 'portal') return null;
+    const user = demo.store.data.users.find(value=>value.id === session.userId);
+    if (!user || user.sample) return null;
+    return { id:user.id, name:user.name, email:user.email };
+  };
+  const connected = createConnectedApplication({ ...(options.connectedOptions || {}), origin, portalIdentity });
   const handler = (req, res) => {
     const connectedRoute = req.url === '/api' || req.url?.startsWith('/api/');
     const demoRoute = req.url === '/api/v1' || req.url?.startsWith('/api/v1/');

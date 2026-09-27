@@ -1,12 +1,12 @@
 # PerkPilot
 
-> The full portal now includes the database-backed Plaid, live-listing, and model-backed workspace under **Connected**. See [CONNECTED.md](CONNECTED.md) for provider details.
+> **Explore** hosts current listings and research guidance; **Connected** manages your bank connections and data consent. Optional **Buy with PerkPilot** uses registered accounts and a controlled Stripe test-store checkout. See [CHECKOUT.md](CHECKOUT.md) for setup and evidence limits.
 
 Personalized deals from spending patterns, with product research, a shared card/quote engine, explicitly approved simulated checkout, and a ledger of confirmed benefits. Implemented from [PERKPILOT.md](PERKPILOT.md).
 
 The original shopping, offer, wallet, extension, and checkout journeys remain a **local synthetic financial demo**. No money moves. Public card product reward rules are published metadata, not proof of card ownership or individual offer eligibility. Optional nearby-place search uses live OpenStreetMap data, separately from the synthetic financial records.
 
-The **Connected** area in the same portal supports Plaid Sandbox transactions, PostgreSQL storage, Gemini or OpenAI answers, and SerpApi Google Shopping results when their credentials are configured. Live records and synthetic demo records stay labeled and use separate storage boundaries.
+The same portal supports Plaid transactions and PostgreSQL storage in **Connected**, plus Gemini or OpenAI guidance and configured live catalogs in **Explore**. Live records and synthetic demo records stay labeled and use separate storage boundaries. A verified registered portal session opens its own connected workspace; matching email addresses alone never merge profiles.
 
 ## Run
 
@@ -23,7 +23,13 @@ Keep this process running, then open:
 - Controlled Alo store: http://localhost:3001/store?product=alo-jacket
 - Controlled Nike store: http://localhost:3001/store?product=nike-pegasus
 
-Choose **Explore Alex's sample profile** for the labeled demo journey or create an account. New account registration also creates the connected profile when the database is configured, so the same credentials open the Connected area. Registered demo records start empty and connected transaction consent starts disabled. Cards selected in Wallet are self-reported and support comparison only. Passwords must be 12–128 characters.
+Choose **Explore Alex's sample profile** for the labeled demo journey or create an account. Registered accounts open Connected with their portal session, with transaction consent disabled initially. An older separate connected profile can be linked explicitly using its credentials from Connected. Sample identities never inherit real bank sessions. Wallet products remain self-reported; test checkout requires a separately consented saved-method enrollment. Passwords must be 12–128 characters.
+
+## Buy with PerkPilot
+
+Optional checkout lets you approve one displayed item/destination/card-set purchase up to a maximum total. Gemini calls narrow preparation tools; a deterministic service enforces the original permission before submitting the selected enrolled Stripe **test** method. PerkPilot Test Store is a controlled merchant, and estimated card rewards are separate from confirmed payments and posted benefits.
+
+See [CHECKOUT.md](CHECKOUT.md) for test-only credentials, explicit migrations, wallet enrollment, signed local webhooks, local one-shot refusal scenarios, and redacted verification reports. Checkout is disabled by default. The [approved specification](docs/superpowers/specs/2026-09-26-agent-checkout-design.md) and [implementation plan](docs/superpowers/plans/2026-09-26-buy-with-perkpilot.md) define the boundary. Live sandbox integration acceptance remains pending; fixture test results do not establish external-provider or PostgreSQL concurrency readiness.
 
 Sample history uses September 23, 2026 as its demo clock. Session/pairing/checkout expiration also checks actual elapsed time.
 
@@ -83,7 +89,7 @@ npm run demo:reset
 
 This preserves registered profiles and their records. Do not run multiple application processes against the same data directory. JSON files are not a production transaction database.
 
-`.env.example` documents configuration. `npm run dev` and `npm start` load a local gitignored `.env` when present; deployed environments use their secret manager. Gemini powers the Connected assistant when configured. The synthetic demo assistant keeps its bounded deterministic behavior unless its optional model provider is configured. Raw account/card/session credentials are never passed to a model, and neither assistant has purchase tools.
+`.env.example` documents configuration. `npm run dev` and `npm start` load a local gitignored `.env` when present; deployed environments use their secret manager. Gemini powers the Explore research assistant when configured. The synthetic demo assistant keeps its bounded deterministic behavior unless its optional model provider is configured. Research assistants have no purchase tools. The separate checkout agent's narrow tools operate only within an already approved purchase permission; raw account/card/session credentials are never passed to a model.
 
 See [CONTRACTS.md](CONTRACTS.md) for API boundaries, [CONNECTED.md](CONNECTED.md) for the implemented provider layer, and [LIVE_INTEGRATION.md](LIVE_INTEGRATION.md) for remaining production integrations. The original design's statements about an earlier repository are requirements context; this README and current test output describe this implementation.
 

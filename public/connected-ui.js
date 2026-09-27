@@ -1,12 +1,21 @@
 'use strict';
 
 (() => {
-  const state = { initialized:false, loading:false, authMode:'login', session:null, dashboard:null, products:null, answer:null, lastSearchQuery:null };
+  const state = { initialized:false, loading:null, identity:null, generation:0, session:null, dashboard:null, products:null, answer:null, lastSearchQuery:null, query:'', error:null, searchError:null, answerError:null };
   let plaidLoader;
   const app = () => window.App;
   const esc = value => app().escapeHtml(value ?? '');
   const money = value => app().money(value);
   const icon = name => app().icon(name);
+  const accountMoney = account => Number.isSafeInteger(account.balanceCents) && /^[A-Z]{3}$/.test(account.currency || '') ? new Intl.NumberFormat('en-US',{style:'currency',currency:account.currency}).format(account.balanceCents/100) : 'Unknown';
+
+  function reset() {
+    Object.assign(state,{initialized:false,loading:null,identity:app()?.state.data?.user?.id || null,generation:state.generation+1,session:null,dashboard:null,products:null,answer:null,lastSearchQuery:null,query:'',error:null,searchError:null,answerError:null});
+  }
+  function ensureIdentity() {
+    if(state.identity !== (app()?.state.data?.user?.id || null)) reset();
+  }
+  const isSample = () => !!app()?.state.data?.user?.sample;
 
   async function api(path, method = 'GET', body) {
     const response = await fetch(`/api${path}`, { method, credentials:'same-origin', headers:body === undefined ? {} : {'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body) });
@@ -16,48 +25,57 @@
   }
 
   function update() {
-    if (app()?.state.page !== 'connected') return;
+    ensureIdentity();
+    if (!['connected','explore'].includes(app()?.state.page)) return;
     const target = document.querySelector('#main-content');
-    if (target) target.innerHTML = render();
+    if (target) target.innerHTML = app().state.page==='explore' ? renderExplore() : render();
   }
 
   async function load(shouldUpdate = true) {
-    if (state.loading) return;
-    state.loading = true;
-    try {
-      state.session = await api('/auth/session');
-      state.dashboard = state.session.user ? await api('/dashboard') : null;
-      state.initialized = true;
-      if (state.session.user && new URLSearchParams(location.search).has('oauth_state_id')) {
-        const token = sessionStorage.getItem('perkpilot_link_token');
-        if (token) await openPlaid(token, location.href); else app().toast('Bank connection session expired. Start again.');
+    ensureIdentity();
+    if(isSample()) return;
+    if (state.loading) return state.loading;
+    const generation=state.generation;
+    const pending=(async()=>{
+      try {
+        const session=await api('/auth/session');
+        const dashboard=session.user ? await api('/dashboard') : null;
+        ensureIdentity();
+        if(generation!==state.generation)return;
+        Object.assign(state,{session,dashboard,initialized:true,error:null});
+        if (session.user && new URLSearchParams(location.search).has('oauth_state_id')) {
+          let stored;try{stored=JSON.parse(sessionStorage.getItem('perkpilot_link_token'));}catch{}
+          if (stored?.identity===state.identity && stored?.token) await openPlaid(stored.token, location.href);
+          else {sessionStorage.removeItem('perkpilot_link_token');app().toast('Bank connection session expired. Start again.');}
+        }
+      } catch(error) {
+        ensureIdentity();
+        if(generation!==state.generation)return;
+        Object.assign(state,{initialized:true,session:null,dashboard:null,error:error.message});
+      } finally {
+        if(generation===state.generation){state.loading=null;if(shouldUpdate)update();}
       }
-    } finally { state.loading = false; }
-    if (shouldUpdate) update();
+    })();
+    state.loading=pending;
+    return pending;
   }
 
   async function refresh() { state.initialized=false; await load(); }
 
   async function authenticate(mode, fields) {
-    try { await api(`/auth/${mode}`, 'POST', fields); }
-    catch (error) {
-      if (mode !== 'register' || error.code !== 'ACCOUNT_EXISTS') throw error;
-      await api('/auth/login', 'POST', {email:fields.email,password:fields.password});
-    }
+    await api(`/auth/${mode}`, 'POST', fields);
+    state.products=null;state.answer=null;state.lastSearchQuery=null;
     await load(false);
     return state.session;
   }
 
   async function logout() {
+    reset();
     await api('/auth/logout', 'POST', {});
-    Object.assign(state,{initialized:true,session:{user:null},dashboard:null,products:null,answer:null,lastSearchQuery:null});
-    update();
   }
 
   function authPanel() {
-    const register = state.authMode === 'register';
-    return `${app().pageHeading('Bring your real data into PerkPilot.', 'Connect accounts, current product listings, and model-backed guidance without leaving the full app.', '<span class="pill neutral">Connected services</span>')}
-      <section class="surface connected-auth-surface"><div><span class="eyebrow green">Optional live workspace</span><h2>${register?'Create your connected profile.':'Sign in to connected services.'}</h2><p>Your demo journeys remain available. Connected records stay in PostgreSQL and use a separate secure session.</p><div class="connected-provider-row"><span class="pill">Plaid</span><span class="pill">Gemini</span><span class="pill">Google Shopping</span></div></div><div class="connected-auth-box"><div class="tabs" role="tablist"><button class="${!register?'active':''}" data-action="connected-auth-mode" data-mode="login">Sign in</button><button class="${register?'active':''}" data-action="connected-auth-mode" data-mode="register">Create account</button></div><form id="connected-auth-form">${register?'<label class="field"><span>Your name</span><input name="name" autocomplete="name" maxlength="80" required></label><label class="field"><span>Shopping location <small>(optional)</small></span><input name="shoppingLocation" autocomplete="address-level2" maxlength="120" placeholder="City, state, country"></label>':''}<label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label class="field"><span>Password</span><input name="password" type="password" autocomplete="${register?'new-password':'current-password'}" minlength="12" maxlength="128" required></label><button class="button full" type="submit">${register?'Create connected profile':'Sign in'} ${icon('arrow')}</button></form></div></section>`;
+    return `${app().pageHeading('Your bank connections.', 'Your accounts, consent, and imported data in one place.')}<section class="surface"><h2>${isSample()?'Sample profile · bank connections are off':'Connected services are unavailable.'}</h2><p>${isSample()?'Sample profiles never access real bank accounts. Sign out and create or sign in to your own PerkPilot account to connect a bank.':esc(state.error || 'Your PerkPilot session could not be verified. Refresh your session and try again.')}</p>${isSample()?'':'<button class="button secondary" data-action="connected-refresh">Try again</button>'}</section>`;
   }
 
   const merchantMark = name => esc(String(name || 'P').slice(0,2).toUpperCase());
@@ -78,28 +96,46 @@
   }
 
   function productsMarkup(result) {
-    if (!result) return '<div class="connected-empty compact"><strong>Search current products.</strong><p>Results come from Google Shopping through SerpApi and use your saved shopping location.</p></div>';
+    if (!result) return '<div class="connected-empty compact"><strong>Search current products.</strong><p>Search listings from the configured catalog using your saved shopping location.</p></div>';
     if (!result.products?.length) return '<div class="connected-empty compact"><strong>No current listings found.</strong><p>Try a broader product name or another location.</p></div>';
-    return `<p class="fine-note connected-result-meta">${result.products.length} listings near ${esc(result.location)} · observed ${esc(new Date(result.observedAt).toLocaleString())}</p>${result.products.map(product=>`<article class="product-card connected-product"><div class="product-art">${product.imageUrl?`<img src="${esc(product.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:`<span>${icon('bag')}</span>`}</div><div><h3>${esc(product.name)}</h3><p>${esc(product.merchantName)} · ${esc(product.source)}</p><div class="product-actions"><a class="text-button" href="${esc(product.url)}" target="_blank" rel="noopener noreferrer">View product options ${icon('external')}</a></div><small class="fine-note">${esc(product.priceNote)}</small></div><strong class="product-price">${money(product.priceCents)}</strong></article>`).join('')}`;
+    return `<p class="fine-note connected-result-meta">${result.products.length} listings${result.location?` near ${esc(result.location)}`:''} · observed ${esc(new Date(result.observedAt).toLocaleString())}</p>${result.products.map(product=>`<article class="product-card connected-product"><div class="product-art">${product.imageUrl?`<img src="${esc(product.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:`<span>${icon('bag')}</span>`}</div><div><h3>${esc(product.name)}</h3><p>${esc(product.merchantName)} · ${esc(product.source)}</p><div class="product-actions"><a class="text-button" href="${esc(product.url)}" target="_blank" rel="noopener noreferrer">View product options ${icon('external')}</a></div><small class="fine-note">${esc(product.priceNote)}</small></div><strong class="product-price">${money(product.priceCents)}</strong></article>`).join('')}`;
   }
 
   function dashboardPanel() {
     const d=state.dashboard, user=d.user, profile=d.profile;
-    const locationCopy=user.shoppingLocation?`Searching near ${esc(user.shoppingLocation)}.`:'Using the United States fallback until you choose a city.';
-    return `${app().pageHeading('Your connected everyday.', 'Real account data and current products, inside the original PerkPilot experience.', '<span class="pill">Live providers ready</span>', `Hello, ${esc(user.name.split(' ')[0])}.`)}
-      <section class="connected-location location-entry"><span class="location-entry-icon">${icon('pin')}</span><div class="grow"><h2>Shopping location</h2><p id="connected-location-status">${locationCopy} Exact coordinates are not stored.</p><form id="connected-location-form"><input name="location" value="${esc(user.shoppingLocation || '')}" maxlength="120" placeholder="City, state, country" aria-label="Shopping location"><button class="button secondary" type="submit">Save</button></form></div><button class="button white" data-action="connected-locate">${icon('pin')} Use my location</button></section>
+    return `${app().pageHeading('Your bank connections.', 'Manage your accounts, transaction insights, and connected data.', '', `Hello, ${esc(user.name.split(' ')[0])}.`)}
       <section class="dna-visual connected-dna">${profileMarkup(profile)}</section>
-      <div class="grid-two section connected-grid"><section class="surface"><div class="section-heading"><div><h2>Bank connection</h2><p>Plaid Sandbox and transaction controls</p></div><span class="pill ${d.connections.length?'':'neutral'}">${d.connections.length?`${d.connections.length} connected`:'Not connected'}</span></div><div class="switch-row"><div><h3>Use transactions for insights</h3><p>Controls connected Spend DNA and model context.</p></div><button class="toggle" role="switch" aria-checked="${user.consent}" data-action="connected-consent" aria-label="Use connected transactions for insights"></button></div><div class="connected-actions"><button class="button" data-action="connected-link" ${user.consent?'':'disabled'}>${icon('plus')} Connect account</button><button class="button secondary" data-action="connected-sync" ${d.connections.length?'':'disabled'}>${icon('refresh')} Refresh</button></div><div id="connected-connections">${connectionsMarkup(d.connections)}</div><p class="fine-note">Plaid handles bank credentials. PerkPilot stores encrypted access tokens and imported records.</p></section>
+      <div class="grid-two section connected-grid"><section class="surface"><div class="section-heading"><div><h2>Bank connection</h2><p>Plaid and transaction controls</p></div><span class="pill ${d.connections.length?'':'neutral'}">${d.connections.length?`${d.connections.length} connected`:'Not connected'}</span></div><div class="switch-row"><div><h3>Use transactions for insights</h3><p>Controls connected Spend DNA and model context.</p></div><button class="toggle" role="switch" aria-checked="${user.consent}" data-action="connected-consent" aria-label="Use connected transactions for insights"></button></div><div class="connected-actions"><button class="button" data-action="connected-link" ${user.consent?'':'disabled'}>${icon('plus')} Connect account</button><button class="button secondary" data-action="connected-sync" ${d.connections.length?'':'disabled'}>${icon('refresh')} Refresh</button></div><div id="connected-connections">${connectionsMarkup(d.connections)}</div><p class="fine-note">Plaid handles bank credentials. PerkPilot stores encrypted access tokens and imported records.</p></section>
       <section class="surface"><div class="section-heading"><div><h2>Recent connected activity</h2><p>Posted and pending records from Plaid</p></div></div><div id="connected-transactions">${transactionsMarkup(d.transactions)}</div></section></div>
-      <section class="section"><div class="section-heading"><div><h2>Explore current products</h2><p>Live Google Shopping listings through SerpApi</p></div></div><form id="connected-search-form" class="search-composer">${icon('explore')}<input name="query" minlength="2" maxlength="120" placeholder="Search headphones, running shoes, luggage…" required><button class="icon-button" type="submit" aria-label="Search current products">${icon('arrow')}</button></form><div id="connected-products">${productsMarkup(state.products)}</div></section>
-      <section id="connected-assistant" class="surface section connected-assistant"><div class="section-heading"><div><h2>Ask PerkPilot</h2><p>Gemini receives aggregates and up to five current listings, never bank credentials or raw transactions.</p></div><span class="pill ${d.aiConfigured?'':'neutral'}">${d.aiConfigured?'Gemini ready':'AI unavailable'}</span></div>${state.answer?`<div class="assistant-answer">${esc(state.answer.answer)}\n\n${esc(state.answer.source)} · ${esc(state.answer.model)}</div>`:''}<form id="connected-assistant-form" class="assistant-form"><input name="message" maxlength="1000" placeholder="What patterns do you see in my spending?" required><button class="button" type="submit" aria-label="Ask connected assistant">${icon('arrow')}</button></form></section>
-      <details class="surface section connected-controls"><summary>Connected data controls</summary><p class="fine-note">Disconnecting removes imported data for that Plaid connection. Deleting the connected profile removes its stored PerkPilot records.</p><div class="connected-actions"><button class="button ghost" data-action="connected-logout">Sign out of connected services</button><button class="button danger" data-action="connected-delete">Delete connected profile</button></div></details>`;
+      <section class="surface section"><div class="section-heading"><div><h2>Connected accounts</h2><p>Balances reported by your financial provider.</p></div></div>${d.accounts?.length?d.accounts.map(account=>`<div class="list-row"><span class="merchant-tile">${icon('card')}</span><span class="grow"><strong>${esc(account.name || 'Bank account')}</strong><p>${esc(account.type)}${account.last4?` · •••• ${esc(account.last4)}`:''}</p></span><strong>${accountMoney(account)}</strong></div>`).join(''):'<p class="fine-note">Connect a bank to see its accounts here.</p>'}</section>
+      ${state.session.authMode==='portal'?'<details class="surface section"><summary>Use an existing connected profile</summary><p class="fine-note">If you previously created a separate connected profile, enter its credentials to link it to this PerkPilot account. Matching email addresses alone never link accounts.</p><form id="connected-auth-form"><label class="field"><span>Existing connected email</span><input name="email" type="email" autocomplete="email" required></label><label class="field"><span>Existing connected password</span><input name="password" type="password" autocomplete="current-password" maxlength="128" required></label><button class="button secondary" type="submit">Link existing profile</button></form></details>':''}
+      <details class="surface section connected-controls"><summary>Connected data controls</summary><p class="fine-note">Disconnecting removes imported data for that Plaid connection. Deleting connected data removes its stored accounts, transactions, and consent. Your PerkPilot account remains available.</p><div class="connected-actions">${state.session.authMode==='portal'?'':'<button class="button ghost" data-action="connected-logout">Sign out of connected services</button>'}<button class="button danger" data-action="connected-delete">Delete connected data</button></div></details>`;
   }
 
+  function manualSearch() {
+    return `<p class="fine-note">You can search manually and review prices at the retailer.</p><a class="button secondary" href="https://www.google.com/search?tbm=shop&amp;q=${encodeURIComponent(state.query || 'headphones')}" target="_blank" rel="noopener noreferrer">Search on Google Shopping ${icon('external')}</a>`;
+  }
+
+  function renderExplore() {
+    ensureIdentity();
+    const heading=app().pageHeading('A good fit starts with a question.', 'Search current products and ask PerkPilot to help compare your options.');
+    if(!state.initialized && !isSample()) { queueMicrotask(()=>load());return heading+loadingMarkup(); }
+    const d=state.dashboard,user=d?.user;
+    const locationCopy=user?.shoppingLocation?`Searching near ${esc(user.shoppingLocation)}.`:'Using the catalog default location until you choose a city.';
+    return heading+`${user?`<section class="connected-location location-entry"><span class="location-entry-icon">${icon('pin')}</span><div class="grow"><h2>Shopping location</h2><p id="connected-location-status">${locationCopy} Exact coordinates are not stored.</p><form id="connected-location-form"><input name="location" value="${esc(user.shoppingLocation || '')}" maxlength="120" placeholder="City, state, country" aria-label="Shopping location"><button class="button secondary" type="submit">Save</button></form></div><button class="button white" data-action="connected-locate">${icon('pin')} Use my location</button></section>`:''}
+      <section class="section"><form id="connected-search-form" class="search-composer">${icon('explore')}<input name="query" value="${esc(state.query)}" minlength="2" maxlength="120" aria-label="Search current products" placeholder="Search headphones, running shoes, luggage…" required><button class="icon-button" type="submit" aria-label="Search current products">${icon('arrow')}</button></form>
+      ${state.error || !d?.catalogConfigured?`<div class="surface"><h2>Current product search is unavailable.</h2><p>${esc(state.error || 'A live product catalog has not been configured.')} No sample listings are substituted.</p>${manualSearch()}<button class="text-button" data-action="connected-refresh">Try again</button></div>`:state.searchError?`<div class="surface" role="alert"><p>${esc(state.searchError)}</p>${manualSearch()}</div>`:`<div id="connected-products">${productsMarkup(state.products)}</div>`}</section>
+      <section id="connected-assistant" class="surface section connected-assistant"><div class="section-heading"><div><h2>Ask PerkPilot</h2><p>The assistant uses observed listings and spending aggregates when you enable insights in Connected.</p></div><span class="pill ${d?.aiConfigured?'':'neutral'}">${d?.aiConfigured?'Assistant ready':'AI unavailable'}</span></div>${state.answer?`<div class="assistant-answer">${esc(state.answer.answer)}\n\n${esc(state.answer.source)} · ${esc(state.answer.model)}</div>`:''}${state.answerError?`<p class="error-message" role="alert">${esc(state.answerError)}</p>`:''}${d?.aiConfigured?'':'<p class="fine-note">The assistant is unavailable. You can still search products manually.</p>'}<form id="connected-assistant-form" class="assistant-form"><input name="message" maxlength="1000" placeholder="Help me compare these products…" aria-label="Ask PerkPilot about products" required><button class="button" type="submit" ${d?.aiConfigured?'':'disabled'} aria-label="Ask connected assistant">${icon('arrow')}</button></form><p class="fine-note">Prices are observed listings. Tax, shipping, and availability are confirmed at merchant checkout.</p></section>`;
+  }
+
+  function loadingMarkup() { return '<div class="initial-loading connected-loading"><span><i class="loading-dot"></i><i class="loading-dot"></i><i class="loading-dot"></i></span></div>'; }
+
   function render() {
+    ensureIdentity();
+    if(isSample())return authPanel();
     if (!state.initialized) {
-      queueMicrotask(()=>load().catch(error=>{ state.initialized=true; state.session={user:null}; app().toast(error.message); update(); }));
-      return `${app().pageHeading('Connected PerkPilot.', 'Loading your live providers and account data…', '<span class="pill neutral">Connecting</span>')}<div class="initial-loading connected-loading"><span><i class="loading-dot"></i><i class="loading-dot"></i><i class="loading-dot"></i></span></div>`;
+      queueMicrotask(()=>load());
+      return app().pageHeading('Your bank connections.', 'Loading your account data…')+loadingMarkup();
     }
     return state.session?.user && state.dashboard ? dashboardPanel() : authPanel();
   }
@@ -117,42 +153,65 @@
   }
 
   async function openPlaid(linkToken, receivedRedirectUri) {
+    ensureIdentity();const generation=state.generation;
     await loadPlaid();
-    const link=window.Plaid.create({token:linkToken,...(receivedRedirectUri?{receivedRedirectUri}:{}),onSuccess:async publicToken=>{sessionStorage.removeItem('perkpilot_link_token');history.replaceState(null,'',location.pathname+location.hash);await api('/plaid/exchange','POST',{publicToken});await refresh();app().toast('Account connected.');},onExit:error=>{if(error)app().toast(error.display_message||'Bank connection closed.');}});
+    ensureIdentity();if(generation!==state.generation)return;
+    const link=window.Plaid.create({token:linkToken,...(receivedRedirectUri?{receivedRedirectUri}:{}),onSuccess:async publicToken=>{ensureIdentity();if(generation!==state.generation)return;sessionStorage.removeItem('perkpilot_link_token');history.replaceState(null,'',location.pathname+location.hash);await api('/plaid/exchange','POST',{publicToken});ensureIdentity();if(generation!==state.generation)return;await refresh();app().toast('Account connected.');},onExit:error=>{ensureIdentity();if(error&&generation===state.generation)app().toast(error.display_message||'Bank connection closed.');}});
     link.open();
   }
 
   async function action(name, target) {
     switch(name) {
-      case 'connected-auth-mode':state.authMode=target.dataset.mode;update();break;
+      case 'connected-refresh':await refresh();break;
       case 'connected-consent':await api('/consent','POST',{consent:!state.dashboard.user.consent});await refresh();app().toast('Connected insight preference saved.');break;
-      case 'connected-link':{const result=await api('/plaid/link-token','POST',{});sessionStorage.setItem('perkpilot_link_token',result.linkToken);await openPlaid(result.linkToken);break;}
+      case 'connected-link':{ensureIdentity();const generation=state.generation;const result=await api('/plaid/link-token','POST',{});ensureIdentity();if(generation!==state.generation)break;sessionStorage.setItem('perkpilot_link_token',JSON.stringify({identity:state.identity,token:result.linkToken}));await openPlaid(result.linkToken);break;}
       case 'connected-sync':await api('/plaid/sync','POST',{});await refresh();app().toast('Connected transactions refreshed.');break;
       case 'connected-disconnect':if(confirm('Disconnect this bank and remove its imported data?')){await api(`/plaid/items/${encodeURIComponent(target.dataset.id)}`,'DELETE',{});await refresh();app().toast('Bank disconnected.');}break;
       case 'connected-locate':await locate(target);break;
-      case 'connected-assistant-focus':document.querySelector('#connected-assistant')?.scrollIntoView({behavior:'smooth'});document.querySelector('#connected-assistant-form input')?.focus();break;
+      case 'connected-assistant-focus':app().state.page='explore';if(location.hash!=='#explore')location.hash='explore';app().renderShell();if(!state.initialized)await load();document.querySelector('#connected-assistant')?.scrollIntoView({behavior:'smooth'});document.querySelector('#connected-assistant-form input')?.focus();break;
       case 'connected-logout':await logout();app().toast('Signed out of connected services.');break;
-      case 'connected-delete':if(confirm('Delete your connected profile and all imported data permanently?')){await api('/account','DELETE',{});Object.assign(state,{session:{user:null},dashboard:null,products:null,answer:null});update();app().toast('Connected profile deleted.');}break;
+      case 'connected-delete':if(confirm('Delete your connected accounts, imported transactions, and insight consent permanently?')){await api('/account','DELETE',{});reset();await refresh();app().toast('Connected data deleted.');}break;
     }
   }
 
   async function locate(button) {
+    ensureIdentity();const generation=state.generation,page=app().state.page;
     if (!navigator.geolocation) throw new Error('This browser does not support location lookup. Enter a city manually.');
     const status=document.querySelector('#connected-location-status'); if(status)status.textContent='Waiting for browser location permission…';
     await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:false,maximumAge:300000,timeout:10000})).then(async position=>{
+      ensureIdentity();if(generation!==state.generation || page!==app().state.page)return;
       await api('/profile/location/locate','POST',{latitude:position.coords.latitude,longitude:position.coords.longitude,accuracyMeters:position.coords.accuracy,consent:true});
+      ensureIdentity();if(generation!==state.generation)return;
       state.products=null;state.lastSearchQuery=null;await refresh();app().toast('Shopping location updated.');
-    }).catch(error=>{if(error?.code===1)throw new Error('Location permission was not granted. Enter a city manually.');throw error;});
+    }).catch(error=>{ensureIdentity();if(generation!==state.generation)return;if(error?.code===1)throw new Error('Location permission was not granted. Enter a city manually.');throw error;});
   }
 
   async function submit(form, fields) {
     switch(form.id) {
-      case 'connected-auth-form':await authenticate(state.authMode,fields);update();app().toast('Connected services are ready.');break;
+      case 'connected-auth-form':await authenticate('login',fields);update();app().toast('Existing connected profile linked.');break;
       case 'connected-location-form':await api('/profile/location','PATCH',{location:fields.location});state.products=null;state.lastSearchQuery=null;await refresh();app().toast(fields.location?'Shopping location saved.':'Shopping location cleared.');break;
-      case 'connected-search-form':state.products=await api(`/products?q=${encodeURIComponent(fields.query)}`);state.lastSearchQuery=fields.query;update();break;
-      case 'connected-assistant-form':state.answer=await api('/assistant','POST',{message:fields.message,...(state.lastSearchQuery?{catalogQuery:state.lastSearchQuery}:{})});update();break;
+      case 'connected-search-form':await search(fields.query);break;
+      case 'connected-assistant-form':{
+        ensureIdentity();const generation=state.generation;state.answer=null;state.answerError=null;
+        try{const answer=await api('/assistant','POST',{message:fields.message,...(state.lastSearchQuery?{catalogQuery:state.lastSearchQuery}:{})});ensureIdentity();if(generation===state.generation)state.answer=answer;}
+        catch(error){ensureIdentity();if(generation===state.generation)state.answerError=error.message;}
+        update();break;
+      }
     }
   }
 
-  window.ConnectedUI={render,action,submit,authenticate,logout,refresh};
+  async function search(query) {
+    ensureIdentity();
+    if(!state.initialized)await load(false);
+    const generation=state.generation;
+    Object.assign(state,{query,products:null,answer:null,lastSearchQuery:null,searchError:null,answerError:null});
+    app().state.page='explore';if(location.hash!=='#explore')location.hash='explore';
+    if(state.dashboard?.catalogConfigured){
+      try{const products=await api(`/products?q=${encodeURIComponent(query)}`);ensureIdentity();if(generation===state.generation){state.products=products;state.lastSearchQuery=query;}}
+      catch(error){ensureIdentity();if(generation===state.generation)state.searchError=error.message;}
+    }
+    update();
+  }
+
+  window.ConnectedUI={render,renderExplore,action,submit,search,authenticate,logout,refresh,reset,productById:id=>state.products?.products?.find(product=>product.id===id)};
 })();

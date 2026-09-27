@@ -48,6 +48,71 @@ export function createConnectedApplication(options = {}) {
   requireValue(['http:', 'https:'].includes(canonical.protocol) && !canonical.pathname.slice(1) && !canonical.search && !canonical.hash, 'INVALID_ORIGIN', 'PUBLIC_ORIGIN must be an origin.');
   if (canonical.protocol === 'http:') requireValue(['localhost', '127.0.0.1'].includes(canonical.hostname), 'INSECURE_ORIGIN', 'Public connected mode requires HTTPS.');
 
+  async function portalSession(identity) {
+    if (!identity) return null;
+    let binding = (await db.query('SELECT user_id FROM connected_portal_bindings WHERE portal_user_id=$1',[identity.id])).rows[0];
+    if (!binding) {
+      // Reserved identity email avoids silently adopting an existing same-email
+      // account. Random credentials make this profile portal-only.
+      await db.query(`INSERT INTO connected_users(id,email,name,password_salt,password_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO NOTHING`,
+        [identity.id,`portal-${identity.id}@identity.perkpilot.invalid`,identity.name,randomBytes(16).toString('hex'),randomBytes(64).toString('hex')]);
+      await db.query('INSERT INTO connected_portal_bindings(portal_user_id,user_id) VALUES($1,$2) ON CONFLICT(portal_user_id) DO NOTHING',[identity.id,identity.id]);
+      binding = (await db.query('SELECT user_id FROM connected_portal_bindings WHERE portal_user_id=$1',[identity.id])).rows[0];
+    }
+    const user=(await db.query('SELECT * FROM connected_users WHERE id=$1',[binding.user_id])).rows[0];
+    return user ? {...user,name:identity.name,email:identity.email} : null;
+  }
+
+  async function linkPortalProfile(identity,targetId) {
+    await db.transaction(async tx=>{
+      const bindings=(await tx.query('SELECT * FROM connected_portal_bindings WHERE portal_user_id=$1 OR user_id=$2 ORDER BY portal_user_id FOR UPDATE',[identity.id,targetId])).rows;
+      const current=bindings.find(row=>row.portal_user_id===identity.id);
+      const existing=bindings.find(row=>row.user_id===targetId);
+      requireValue(current,'PROFILE_CHANGED','Your connected profile changed. Refresh and try again.',409);
+      requireValue(!existing || existing.portal_user_id===identity.id,'PROFILE_ALREADY_BOUND','This connected profile belongs to another PerkPilot account.',409);
+      const users=(await tx.query('SELECT * FROM connected_users WHERE id=$1 OR id=$2 ORDER BY id FOR UPDATE',[current.user_id,targetId])).rows;
+      requireValue(users.some(row=>row.id===targetId),'PROFILE_CHANGED','The existing profile changed. Refresh and try again.',409);
+      if(current.user_id===targetId)return;
+      const prior=users.find(row=>row.id===current.user_id);
+      const [items,accounts,transactions]=await Promise.all([
+        tx.query('SELECT id FROM plaid_items WHERE user_id=$1 LIMIT 1',[current.user_id]),
+        tx.query('SELECT id FROM connected_accounts WHERE user_id=$1 LIMIT 1',[current.user_id]),
+        tx.query('SELECT id FROM connected_transactions WHERE user_id=$1 LIMIT 1',[current.user_id])
+      ]);
+      requireValue(prior && !prior.consent && !prior.shopping_location && !items.rows.length && !accounts.rows.length && !transactions.rows.length,
+        'CONNECTED_DATA_PRESENT','Your current connected workspace has data or preferences. Delete its connected data explicitly before linking an existing profile.',409);
+      await tx.query('UPDATE connected_portal_bindings SET user_id=$1 WHERE portal_user_id=$2',[targetId,identity.id]);
+      // Only discard the verified portal's empty, auto-provisioned placeholder.
+      // Independent credentialed profiles remain available through their login.
+      if(prior.id===identity.id && prior.email===`portal-${identity.id}@identity.perkpilot.invalid`){
+        await tx.query('DELETE FROM connected_users WHERE id=$1',[prior.id]);
+      }
+    });
+  }
+
+  async function deleteConnectedProfiles(session,identity) {
+    await db.transaction(async tx=>{
+      if(identity){
+        const binding=(await tx.query('SELECT user_id FROM connected_portal_bindings WHERE portal_user_id=$1 FOR UPDATE',[identity.id])).rows[0];
+        requireValue(binding?.user_id===session.id,'PROFILE_CHANGED','Your connected profile changed. Refresh before deleting its data.',409);
+      }
+      const users=(await tx.query('SELECT * FROM connected_users WHERE id=$1 OR id=$2 ORDER BY id FOR UPDATE',[session.id,identity?.id || session.id])).rows;
+      const ids=[session.id];
+      const automatic=identity && users.find(row=>row.id===identity.id && row.id!==session.id && row.email===`portal-${identity.id}@identity.perkpilot.invalid`);
+      if(automatic){
+        const owner=(await tx.query('SELECT portal_user_id FROM connected_portal_bindings WHERE user_id=$1',[automatic.id])).rows[0];
+        if(!owner || owner.portal_user_id===identity.id)ids.push(automatic.id);
+      }
+      // Include pre-fix orphaned automatic data in this explicit deletion. User
+      // locks also prevent an in-flight update from repopulating the old row.
+      for(const id of ids){
+        const items=(await tx.query('SELECT token_ciphertext FROM plaid_items WHERE user_id=$1',[id])).rows;
+        for(const item of items)await plaid.remove(decryptToken(item.token_ciphertext,process.env.PLAID_TOKEN_ENCRYPTION_KEY));
+      }
+      for(const id of ids)await tx.query('DELETE FROM connected_users WHERE id=$1',[id]);
+    });
+  }
+
   async function snapshot(userId) {
     const [accounts, transactions, items] = await Promise.all([
       db.query('SELECT data FROM connected_accounts WHERE user_id=$1 ORDER BY id', [userId]),
@@ -113,7 +178,8 @@ export function createConnectedApplication(options = {}) {
       if (url.pathname === '/api/health' && method === 'GET') { await db.query('SELECT 1'); return send({ database: 'ready', plaid: plaid.configured ? plaid.environment : 'unconfigured', ai: ai.configured, catalog: catalogName }); }
       const body = ['POST', 'PATCH', 'DELETE'].includes(method) ? await bodyOf(req) : {};
       const cookieToken = req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith('perkpilot_live='))?.slice('perkpilot_live='.length);
-      const session = cookieToken && cookieToken.length < 256 ? (await db.query(`SELECT u.* FROM connected_sessions s JOIN connected_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, [hash(cookieToken)])).rows[0] : null;
+      const identity = options.portalIdentity ? await options.portalIdentity(req) : null;
+      const session = options.portalIdentity ? await portalSession(identity) : cookieToken && cookieToken.length < 256 ? (await db.query(`SELECT u.* FROM connected_sessions s JOIN connected_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, [hash(cookieToken)])).rows[0] : null;
       const setCookie = value => res.setHeader('Set-Cookie', `perkpilot_live=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${value ? 43200 : 0}${canonical.protocol === 'https:' ? '; Secure' : ''}`);
       if (url.pathname === '/api/auth/register' && method === 'POST') {
         requireValue(typeof body.name === 'string' && body.name.trim().length > 0 && body.name.length <= 80, 'INVALID_NAME', 'Enter your name.');
@@ -139,11 +205,18 @@ export function createConnectedApplication(options = {}) {
           fail('INVALID_CREDENTIALS', 'Invalid credentials.', 401);
         }
         await db.query('DELETE FROM connected_login_attempts WHERE attempt_key=$1', [attemptKey]);
+        if (options.portalIdentity) {
+          requireValue(identity, 'LOGIN_REQUIRED', 'Sign in to your PerkPilot account first.', 401);
+          try {
+            await linkPortalProfile(identity,user.id);
+          } catch(error) { if(error.code==='23505')fail('PROFILE_ALREADY_BOUND','This connected profile belongs to another PerkPilot account.',409);throw error; }
+          return send({user:safeUser({...user,name:identity.name,email:identity.email}),authMode:'portal'});
+        }
         const raw = randomBytes(32).toString('base64url');
         await db.query("INSERT INTO connected_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '12 hours')", [hash(raw), user.id]);
         setCookie(raw); return send({ user: safeUser(user) });
       }
-      if (url.pathname === '/api/auth/session' && method === 'GET') return send({ user: session ? safeUser(session) : null });
+      if (url.pathname === '/api/auth/session' && method === 'GET') return send({ user: session ? safeUser(session) : null, ...(options.portalIdentity ? {authMode:'portal'} : {}) });
       if (url.pathname === '/api/auth/logout' && method === 'POST') { if (cookieToken) await db.query('DELETE FROM connected_sessions WHERE token_hash=$1', [hash(cookieToken)]); setCookie(''); return send({ ok: true }); }
       requireValue(session, 'LOGIN_REQUIRED', 'Sign in first.', 401);
       if (url.pathname === '/api/consent' && method === 'POST') {
@@ -196,12 +269,17 @@ export function createConnectedApplication(options = {}) {
         const data = await snapshot(session.id);
         return send({ user: safeUser(session), ...data, profile: session.consent ? profileFrom(data) : null, aiConfigured: ai.configured, catalogConfigured: catalog.configured });
       }
-      if (url.pathname === '/api/products' && method === 'GET') return send(await catalog.search(url.searchParams.get('q') || '', session.shopping_location ? { location:session.shopping_location } : undefined));
+      if (url.pathname === '/api/products' && method === 'GET') {
+        requireValue(catalog.configured,'PROVIDER_NOT_CONFIGURED','Current product search is not configured. Search manually at a retailer or try again later.',503);
+        return send(await catalog.search(url.searchParams.get('q') || '', session.shopping_location ? { location:session.shopping_location } : undefined));
+      }
       if (url.pathname === '/api/assistant' && method === 'POST') {
+        requireValue(ai.configured,'AI_NOT_CONFIGURED','The shopping assistant is not configured. You can still search products manually.',503);
         const data = await snapshot(session.id);
         const profile = session.consent ? profileFrom(data) : { transactionCount: 0, merchants: [], categories: [], totalCents: 0, asOf: null, coverage: 'Spending insights are disabled.' };
         let listings = [];
         if (body.catalogQuery !== undefined) {
+          requireValue(catalog.configured,'PROVIDER_NOT_CONFIGURED','Current product search is not configured.',503);
           requireValue(typeof body.catalogQuery === 'string' && body.catalogQuery.length >= 2 && body.catalogQuery.length <= 120, 'INVALID_SEARCH', 'Search query is invalid.');
           const result = await catalog.search(body.catalogQuery, session.shopping_location ? { location:session.shopping_location } : undefined);
           listings = result.products.slice(0, 5).map(product => ({ name: product.name, merchantName: product.merchantName, priceCents: product.priceCents, shippingCents: product.shippingCents, taxCents: product.taxCents, observedAt: product.observedAt, url: product.url, source: product.source }));
@@ -209,9 +287,7 @@ export function createConnectedApplication(options = {}) {
         return send(await ai.ask(body.message, { ...profile, listings }));
       }
       if (url.pathname === '/api/account' && method === 'DELETE') {
-        const items = (await db.query('SELECT token_ciphertext FROM plaid_items WHERE user_id=$1', [session.id])).rows;
-        for (const item of items) await plaid.remove(decryptToken(item.token_ciphertext, process.env.PLAID_TOKEN_ENCRYPTION_KEY));
-        await db.query('DELETE FROM connected_users WHERE id=$1', [session.id]); setCookie(''); return send({ ok: true });
+        await deleteConnectedProfiles(session,identity);setCookie('');return send({ ok:true });
       }
       fail('NOT_FOUND', 'Endpoint not found.', 404);
     } catch (error) {

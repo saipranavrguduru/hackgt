@@ -35,6 +35,11 @@ export function createApplication(options = {}) {
   const dir = options.dataDir || join(root,'data');
   const store = new StateStore(persist ? join(dir,'state.json') : null);
   const auth = new AuthStore(persist ? join(dir,'auth.json') : null);
+  let checkoutRuntime = options.checkoutRuntime || null;
+  const endCheckoutSession = async (req,token) => {
+    if(checkoutRuntime)await checkoutRuntime.beforeLogout(req);
+    if(token)auth.logout(token);
+  };
   const pairingAttempts = new Map();
   // Throttling holds user IDs and timestamps only, never coordinates or place history.
   const locationAttempts = new Map();
@@ -82,6 +87,7 @@ export function createApplication(options = {}) {
     res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Permissions-Policy','geolocation=(self)');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://cdn.plaid.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://production.plaid.com https://development.plaid.com https://sandbox.plaid.com http://localhost:3000 http://127.0.0.1:3000; frame-src https://cdn.plaid.com https://*.plaid.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    if(checkoutRuntime)res.setHeader('Content-Security-Policy',String(res.getHeader('Content-Security-Policy')).replace("script-src 'self'", "script-src 'self' https://js.stripe.com https://*.js.stripe.com").replace("connect-src 'self'", "connect-src 'self' https://api.stripe.com").replace('frame-src ', 'frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com '));
     const send = (body,status=200) => { if (!res.writableEnded) { store.save(); res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(body)); } };
     try {
       requireValue(/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || '') || req.headers.host === allowedHost,'INVALID_HOST','Use the configured application address.',403);
@@ -92,6 +98,11 @@ export function createApplication(options = {}) {
       const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null;
       const token = bearer || req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('perkpilot_session='))?.slice('perkpilot_session='.length);
       const session = auth.lookup(token);
+      // This exact signed endpoint consumes raw bytes before the normal JSON and
+      // browser-origin checks. All other checkout routes retain browser guards.
+      if(checkoutRuntime && url.pathname==='/api/v1/agent-checkout/webhooks/stripe') {
+        await checkoutRuntime.routes.handleWebhook(req,res);return;
+      }
       const origin = req.headers.origin;
       const extensionOrigin = origin?.match(/^chrome-extension:\/\/([a-p]{32})$/)?.[1];
       const sameOrigin = !origin || origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
@@ -114,6 +125,13 @@ export function createApplication(options = {}) {
         res.writeHead(200,{'Content-Type':mime[extname(target)] || 'application/octet-stream','Cache-Control':'no-cache'}); return res.end(method==='HEAD'?undefined:content);
       }
       if(path==='/health') return send(providerReadiness(mode),mode==='demo'?200:503);
+      if(path==='/agent-checkout' || path.startsWith('/agent-checkout/')) {
+        if(checkoutRuntime){await checkoutRuntime.routes.handle(req,res);return;}
+        const checkoutUser=session?.kind==='portal' && !bearer && store.data.users.find(user=>user.id===session.userId && !user.sample);
+        requireValue(checkoutUser,'REGISTERED_USER_REQUIRED','Sign in with a registered portal account.',403);
+        if(path==='/agent-checkout/capabilities' && method==='GET')return send({enabled:false,ready:false,providerMode:'test',missing:['Start checkout after configuring Stripe test keys.']});
+        fail('CHECKOUT_DISABLED','Test checkout is not configured yet.',503);
+      }
       requireValue(mode==='demo','LIVE_PROVIDER_UNAVAILABLE',providerReadiness(mode).message,503);
       const body = ['POST','PATCH','DELETE'].includes(method) ? await readBody(req) : {};
       const state = store.data;
@@ -142,11 +160,11 @@ export function createApplication(options = {}) {
       if(path==='/auth/register' && method==='POST') {
         const account=auth.register(body);
         const user={...account,sample:false,consent:false,preferences:{interests:[],mutedMerchants:[],mutedCategories:[],excludedTransactions:[]},activatedOfferIds:[]};
-        state.users.push(user); cookie(res,auth.issue(user.id),req); return send({user:cleanUser(user)},201);
+        state.users.push(user); await endCheckoutSession(req,token); cookie(res,auth.issue(user.id),req); return send({user:cleanUser(user)},201);
       }
-      if(path==='/auth/login' && method==='POST') { const raw=auth.login(body.email,body.password,req.socket.remoteAddress); cookie(res,raw,req); return send({user:cleanUser(state.users.find(u=>u.id===auth.lookup(raw).userId))}); }
-      if(path==='/auth/demo' && method==='POST') { const user=state.users.find(u=>u.id===body.userId && u.sample); requireValue(user,'INVALID_PROFILE','Choose Alex or Taylor.'); cookie(res,auth.issue(user.id),req); return send({user:cleanUser(user)}); }
-      if(path==='/auth/logout' && method==='POST') { auth.logout(token); cookie(res,'',req); return send({ok:true}); }
+      if(path==='/auth/login' && method==='POST') { const raw=auth.login(body.email,body.password,req.socket.remoteAddress); await endCheckoutSession(req,token); cookie(res,raw,req); return send({user:cleanUser(state.users.find(u=>u.id===auth.lookup(raw).userId))}); }
+      if(path==='/auth/demo' && method==='POST') { const user=state.users.find(u=>u.id===body.userId && u.sample); requireValue(user,'INVALID_PROFILE','Choose Alex or Taylor.'); await endCheckoutSession(req,token); cookie(res,auth.issue(user.id),req); return send({user:cleanUser(user)}); }
+      if(path==='/auth/logout' && method==='POST') { await endCheckoutSession(req,token); cookie(res,'',req); return send({ok:true}); }
       if(path==='/extension/pairings' && method==='POST') {
         requireValue(typeof body.extensionId==='string' && /^[a-p]{32}$/.test(body.extensionId),'INVALID_EXTENSION','A valid extension ID is required.');
         if(extensionOrigin) requireValue(body.extensionId===extensionOrigin,'ORIGIN_REJECTED','Extension origin does not match.',403);
@@ -223,7 +241,7 @@ export function createApplication(options = {}) {
         const card={...product,id:randomUUID(),userId,productId:product.id,selfReported:true,source:'self-reported',sourceLabel:'Self-reported · comparison only',provenance:'self_reported',paymentReference:null,verified:false}; state.cards.push(card); return send(card,201);
       }
       const cardDelete=path.match(/^\/finance\/cards\/([^/]+)$/);
-      if(cardDelete && method==='DELETE') { owned(state.cards,cardDelete[1],userId); state.cards=state.cards.filter(c=>c.id!==cardDelete[1]); return send({ok:true}); }
+      if(cardDelete && method==='DELETE') { owned(state.cards,cardDelete[1],userId); if(checkoutRuntime)await checkoutRuntime.beforeWalletRemove(req,cardDelete[1]); state.cards=state.cards.filter(c=>c.id!==cardDelete[1]); return send({ok:true}); }
       if(path==='/commerce/offers' && method==='GET') return send(feed(userId));
       const offerAction=path.match(/^\/commerce\/offers\/([^/]+)\/(activate|feedback)$/);
       if(offerAction && method==='POST') {
@@ -330,7 +348,7 @@ export function createApplication(options = {}) {
       if(!res.writableEnded) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify({error:{code:error.code || 'INVALID_REQUEST',message:error.message || 'Request failed.'}})); }
     }
   }
-  return {server:createServer(handler),createStoreServer:()=>createServer(handler),store,auth,handler};
+  return {server:createServer(handler),createStoreServer:()=>createServer(handler),store,auth,handler,setCheckoutRuntime:runtime=>{checkoutRuntime=runtime;}};
 }
 
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {

@@ -13,6 +13,7 @@ window.ResearchUI = (() => {
   const btn = (label,action,data='',cls='') => A().button(label,action,data,cls);
 
   function render() {
+    if(!A().state.data.user?.sample && window.ConnectedUI)return window.ConnectedUI.renderExplore();
     const {pageHeading,sectionHeading,empty}=A();
     const watches=arr(A().state.data.watches);
     const heading=pageHeading('A good fit starts with a question.', 'A little research for the things that matter.');
@@ -40,6 +41,7 @@ window.ResearchUI = (() => {
   function compareBar(){return `<div class="compare-bar"><span>${state.selected.size} option${state.selected.size===1?'':'s'} selected</span><div class="row"><button class="text-button" data-action="clear-comparison">Clear</button><button class="button" data-action="compare-products" ${state.selected.size<2?'disabled':''}>Compare ${symbol('arrow')}</button></div></div>`;}
 
   async function search(query,requirements) {
+    if(!A().state.data.user?.sample && window.ConnectedUI){A().closeSheet();return window.ConnectedUI.search(query);}
     state.query=query;state.tab='search';
     const result=await A().api('/research/sessions','POST',{query,...(requirements?{requirements}:{})});state.session=result.session||result;state.candidates=arr(result.candidates||state.session.candidates);state.selected.clear();
     A().closeSheet();A().state.page='explore';if(location.hash!=='#explore')location.hash='explore';A().renderShell();
