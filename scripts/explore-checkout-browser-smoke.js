@@ -129,6 +129,7 @@ try {
   await assertFit();await checkout.locator('.checkout-permission').scrollIntoViewIfNeeded();await screenshot('permission-desktop');
   await page.setViewportSize({width:390,height:844});await assertFit();await checkout.locator('[data-checkout-form="buy"]').scrollIntoViewIfNeeded();await screenshot('permission-mobile');await page.setViewportSize({width:1440,height:1000});
   await checkout.locator('[data-checkout-action="buy"]').click();await checkout.locator('[data-checkout-receipt]').waitFor();
+  await page.waitForFunction(()=>window.App.state.data.savings.checkoutCashbackCents===296);
   assert.equal(fixture.provider.calls.length,1);assert.equal(fixture.provider.calls[0].amountCents,14799);assert.equal(modelCalls,3);
   const state=await api('/bootstrap',undefined,'GET'),principal='portal:'+state.user.id;
   const savedMethod=(await fixture.repository.query('SELECT payment_method_id FROM pp_checkout_methods WHERE subject_key=$1 AND card_id=$2',[principal,activeCard.id])).rows[0];
@@ -143,7 +144,19 @@ try {
   await checkout.locator('.checkout-progress').scrollIntoViewIfNeeded();await screenshot('previous-purchase-desktop');await page.setViewportSize({width:390,height:844});await assertFit();await checkout.locator('.checkout-progress').scrollIntoViewIfNeeded();await screenshot('previous-purchase-mobile');
   const imports=requests.filter(request=>request.path.endsWith('/catalog-products')&&request.method==='POST');assert.ok(imports.length>=4);for(const request of imports)assert.deepEqual(Object.keys(request.body),['checkoutReference']);
   const approvals=requests.filter(request=>request.path.endsWith('/intents')&&request.method==='POST');assert.equal(approvals.length,2);for(const request of approvals)assert.deepEqual(Object.keys(request.body).sort(),['approved','maxAmountCents','previewId']);
+  await closeProduct();await page.setViewportSize({width:1440,height:1000});await page.locator('.nav-list a[href="#saved"]').click();
+  await page.locator('.metric-value').waitFor();assert.equal(await page.locator('.metric-value').innerText(),'$2.96','Completed order cashback counts; pending purchases do not.');
+  assert.equal(await page.locator('.savings-purchase').count(),1);assert.match(await page.locator('.savings-purchase').innerText(),/Explore travel headphones/);await screenshot('savings-checkout-desktop');
+  await page.reload();await page.locator('.metric-value').waitFor();assert.equal(await page.locator('.metric-value').innerText(),'$2.96','Reload must neither lose nor duplicate purchase cashback.');
+  await page.locator('.nav-list a[href="#for-you"]').click();assert.match(await page.locator('.saved-quiet').innerText(),/\$2\.96/);
+  await page.locator('[data-action="location-open"]').first().click();await page.locator('#location-form [name="category"]').selectOption('dining');await page.locator('#location-form [name="placeName"]').fill('Cafe fixture');await page.locator('#location-form [name="amount"]').fill('100');await page.locator('#location-form [type="submit"]').click();
+  await page.locator('[data-action="location-track-purchase"]').waitFor();assert.equal((await api('/rewards/summary',undefined,'GET')).trackedTotalCents,296,'Merely comparing cards must not add savings.');
+  await page.locator('[data-action="location-track-purchase"]').click();await page.waitForFunction(()=>window.App.state.data.savings.trackedTotalCents===596);assert.equal(await page.locator('[data-action="location-track-purchase"]').isDisabled(),true);await screenshot('savings-manual-purchase');
+  await page.locator('#sheet [data-action="close"]').click();await page.locator('.nav-list a[href="#saved"]').click();assert.equal(await page.locator('.metric-value').innerText(),'$5.96');assert.equal(await page.locator('.savings-purchase').count(),2);assert.match(await page.locator('.savings-history').innerText(),/Cafe fixture/);await screenshot('savings-combined-desktop');
+  await page.setViewportSize({width:390,height:844});await assertFit();await screenshot('savings-combined-mobile');
+  await page.locator('[data-action="remove-card-purchase"]').click();await page.waitForFunction(()=>window.App.state.data.savings.trackedTotalCents===296);assert.equal(await page.locator('.metric-value').innerText(),'$2.96');assert.equal(await page.locator('.savings-purchase').count(),1);
   assert.deepEqual(pageErrors,[]);
+  console.log('PASS: completed checkout cashback updates Saved automatically; pending payment excluded; reload deduplicates; manual I bought this adds canonical cashback once; Remove tracking corrects the total; desktop/mobile savings views.');
   console.log('PASS: registered Explore search; automatic wallet advice before enrollment; recommendation refresh after wallet creation; conditional Savor dining rewards; enrolled Active Cash checkout highlight and receipt; image/title/action product opening; unavailable price; wallet creation/enrollment/removal preserve selected product; unrelated Wallet dialogs preserve checkout; delayed wallet response preserves newer product; exact product/total preview; explicit approval; reopen without duplicate payment; another pending product blocks checkout with correct identity; desktop and 390px layouts. All provider/catalog/model transports are isolated fixtures.');
 } catch(error) {
   if(browser){mkdirSync('test-results/explore-checkout-browser',{recursive:true});const page=browser.contexts()[0]?.pages()[0];await page?.screenshot({path:'test-results/explore-checkout-browser/failure.png',fullPage:true}).catch(()=>{});}

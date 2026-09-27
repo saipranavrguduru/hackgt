@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false,selection=null,storeProducts=null,previewCards=[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208,rateBps:200}]}={}) {
+function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false,selection=null,storeProducts=null,previewCards=[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208,rateBps:200}],onPurchaseConfirmed=()=>{},reconciled=null}={}) {
   const requests=[],timers=[],store=new Map(recovered?[['perkpilot-checkout-intent',recovered]]:[]);
   const root={innerHTML:'',addEventListener(){},removeEventListener(){},querySelector(){return null;}};
   const cart={sku:'everyday-headphones',variantId:'black',quantity:1,name:'Headphones <script>evil()</script>',merchantName:'PerkPilot Test Store',currency:'USD',merchandiseCents:9000,taxCents:900,shippingCents:500,totalCents:10400,destinationLabel:'Saved test destination'};
@@ -21,7 +21,7 @@ function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostRespo
     if(path.endsWith('/enrollments'))return {id:'setup',clientSecret:'setup_secret_sensitive'};
     if(path.endsWith('/complete'))return {cardId:'card-a'};
     if(path.endsWith('/payment-action'))return {clientSecret:'payment_secret_sensitive'};
-    if(path.endsWith('/reconcile'))return {id:'intent',state:'payment_pending',events:[],order:null};
+    if(path.endsWith('/reconcile'))return reconciled || {id:'intent',state:'payment_pending',events:[],order:null};
     if(path.includes('/intents/')){const id=path.split('/').at(-1),entry=discovered.find(value=>value.id===id);return {...entry,id,previewId:entry?.previewId||'preview',state:entry?.state==='confirmed'?'confirmed':'payment_pending',events:[{code:'PAYMENT_DISPATCHED',state:'payment_pending'}],order:entry?.order||{paymentId:'pi_pending',totalCents:10400,card:{last4:'4242'}}};}
     return {};
   };
@@ -30,7 +30,7 @@ function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostRespo
   const window={Stripe:()=>stripe,localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},location:{href:'http://localhost:3000/#connected'}};
   const context={window,document:{},console,Intl,URL,Date,Promise,queueMicrotask,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){}};
   vm.createContext(context);vm.runInContext(readFileSync(new URL('../public/checkout-ui.js',import.meta.url),'utf8'),context);
-  const ui=window.CheckoutUI.mount({root,api,identity:'alice',walletCards,sample,selection});
+  const ui=window.CheckoutUI.mount({root,api,identity:'alice',walletCards,sample,selection,onPurchaseConfirmed});
   const remount=(identity='alice',nextSelection=selection)=>{const nextRoot={...root,innerHTML:''};const nextUI=window.CheckoutUI.mount({root:nextRoot,api,identity,walletCards:[{id:'card-a',productId:'active-cash',name:'Active Cash'}],selection:nextSelection});return {ui:nextUI,root:nextRoot};};
   return {ui,root,requests,timers,store,stripeCalls,discovered,capabilities,resourceErrors,remount,release:()=>release?.()};
 }
@@ -294,4 +294,30 @@ test('a preview without ranked cards reports no enrolled recommendation instead 
     assert.doesNotMatch(f.root.innerHTML,/data-checkout-best-card|Best enrolled card for this test purchase/);
     assert.match(f.root.innerHTML,/Current total<\/dt><dd>\$104\.00/);
   }
+});
+
+test('newly provider-confirmed checkout refreshes tracked savings once without changing its receipt',async()=>{
+  const observed=[],confirmed={id:'intent',state:'confirmed',previewId:'preview',events:[],order:{confirmedAt:1,merchantName:'PerkPilot Test Store',totalCents:10400}};
+  const f=fixture({recovered:'intent',reconciled:confirmed,onPurchaseConfirmed:view=>{observed.push(view.id);}});await f.ui.ready;
+  assert.deepEqual(observed,[]);
+  await f.ui.reconcile();await f.ui.reconcile();
+  assert.deepEqual(observed,['intent']);assert.match(f.root.innerHTML,/data-checkout-receipt/);
+  assert.equal(f.requests.some(r=>r.path.endsWith('/intents')&&r.method==='POST'),false);
+});
+
+test('an immediately confirmed approval refreshes savings but historic receipts do not restart refresh loops',async()=>{
+  let updates=0;
+  const f=fixture({lostAfterSuccess:true,onPurchaseConfirmed:()=>{updates++;}});await f.ui.ready;
+  await f.ui.preparePreview({sku:'everyday-headphones',variantId:'black',quantity:1,destinationId:'destination'});await f.ui.buy(11000);
+  assert.equal(updates,1);
+  const recovered=fixture({discovered:[{id:'old',state:'confirmed',order:{confirmedAt:1}}],onPurchaseConfirmed:()=>{updates++;}});await recovered.ui.ready;
+  assert.equal(updates,1);assert.match(recovered.root.innerHTML,/data-checkout-receipt/);
+});
+
+test('a failed savings refresh cannot erase provider-confirmed checkout success',async()=>{
+  let updates=0;
+  const f=fixture({recovered:'intent',reconciled:{id:'intent',state:'confirmed',order:{confirmedAt:1}},onPurchaseConfirmed:()=>{updates++;throw new Error('Refresh unavailable');}});await f.ui.ready;
+  await f.ui.reconcile();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(updates,1);assert.match(f.root.innerHTML,/data-checkout-receipt/);
+  assert.doesNotMatch(f.root.innerHTML,/Refresh unavailable/);
 });

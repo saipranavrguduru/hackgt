@@ -168,7 +168,7 @@
       const result=await app().api('/agent-checkout/catalog-products','POST',{checkoutReference:product.checkoutReference});
       if(!current())return;
       if(!result.product?.sku || !result.product?.variantId || !window.CheckoutUI)throw new Error('The selected product could not be prepared. Refresh your search and try again.');
-      productController=window.CheckoutUI.mount({root,api:app().api,selection:{sku:result.product.sku,variantId:result.product.variantId},walletCards:app().dataArray(app().state.data.cards),cardProducts:app().dataArray(app().state.data.cardProducts),identity:state.identity,sample:false,onWalletChanged:()=>app().refresh()});
+      productController=window.CheckoutUI.mount({root,api:app().api,selection:{sku:result.product.sku,variantId:result.product.variantId},walletCards:app().dataArray(app().state.data.cards),cardProducts:app().dataArray(app().state.data.cardProducts),identity:state.identity,sample:false,onWalletChanged:()=>app().refresh(),onPurchaseConfirmed:()=>app().refresh()});
     } catch(error) {
       if(!current())return;
       const message=error.code==='NOT_FOUND'?'Sandbox checkout is not enabled. Start the project with checkout enabled, then try again.':error.message;

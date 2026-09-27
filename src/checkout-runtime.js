@@ -4,7 +4,7 @@ import {createCheckoutRoutes} from './checkout-routes.js';
 
 export async function createCheckoutRuntime({auth,store,pool,provider,now=Date.now,agentFactory,config={}}={}) {
  const enabled=config.enabled ?? process.env.PERKPILOT_CHECKOUT_ENABLED==='1';
- if(!enabled)return{routes:{handle:async()=>false,handleWebhook:async()=>false},capabilities:()=>({enabled:false,ready:false}),start:async()=>{},close:async()=>{},beforeLogout:async()=>{},beforeWalletRemove:async()=>{}};
+ if(!enabled)return{routes:{handle:async()=>false,handleWebhook:async()=>false},capabilities:()=>({enabled:false,ready:false}),start:async()=>{},close:async()=>{},beforeLogout:async()=>{},beforeWalletRemove:async()=>{},listRewardPurchases:async()=>[]};
  const origin=config.origin || process.env.CHECKOUT_ORIGIN || `http://localhost:${process.env.PORT || 3000}`;
  let parsed;try{parsed=new URL(origin);}catch{fail('INVALID_CHECKOUT_ORIGIN','Configure a local checkout origin.',503);}
  requireValue(parsed.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(parsed.hostname) && parsed.origin===origin,'INVALID_CHECKOUT_ORIGIN','Checkout requires an exact loopback portal origin.',503);
@@ -77,6 +77,7 @@ export async function createCheckoutRuntime({auth,store,pool,provider,now=Date.n
  function asPrincipal(value){try{return value?.subjectKey?value:resolvePrincipal(value);}catch(error){if(error.code==='REGISTERED_USER_REQUIRED')return null;throw error;}}
  async function beforeLogout(sessionOrPrincipal){const principal=asPrincipal(sessionOrPrincipal);if(!principal)return;return service.revokeSession(principal);}
  async function beforeWalletRemove(sessionOrPrincipal,cardId){const principal=asPrincipal(sessionOrPrincipal);if(!principal)return;const methods=await service.listMethods(principal);if(methods.some(method=>method.cardId===cardId || method.walletCardId===cardId))return service.removeMethod(principal,cardId);return{ok:true};}
+ async function listRewardPurchases(sessionOrRequest){return service.listRewardPurchases(resolvePrincipal(sessionOrRequest));}
  const routes=createCheckoutRoutes({service,merchant,provider,resolvePrincipal,capabilities,origin,now,onAuthorized:()=>{if(started)queueMicrotask(schedulePoll);}});
- return {routes,service,repository,merchant,provider,agent,authAdapter,resolvePrincipal,capabilities,start,close,beforeLogout,beforeWalletRemove};
+ return {routes,service,repository,merchant,provider,agent,authAdapter,resolvePrincipal,capabilities,start,close,beforeLogout,beforeWalletRemove,listRewardPurchases};
 }

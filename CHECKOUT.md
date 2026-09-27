@@ -20,6 +20,14 @@ Product references expire after 15 minutes and are tied to the registered portal
 
 The isolated regression command is `npm run test:explore:browser`. Its catalog, Gemini transport, Stripe fields, and payment provider are test doubles; it verifies the integrated UI/server flow without spending external API quota. See the [Explore integration plan](docs/superpowers/plans/2026-09-27-explore-checkout.md).
 
+## Cashback in Saved
+
+**Saved this year** now includes confirmed ledger benefits plus clearly labeled **estimated cashback**. Completed Explore/Test Store orders contribute their persisted cashback estimate automatically; processing, failed, cancelled, and unconfirmed orders contribute nothing. Opening a receipt or replaying a webhook does not add another entry. Existing completed orders appear after refresh, without a data migration or new provider request.
+
+For **I’m at… / Which card is best?**, enter an amount, compare cards, then choose **I bought this** to record a self-reported purchase using the recommended card. Comparing cards alone adds nothing. The server calculates the estimate from its card rules and deduplicates retries. **Remove tracking** in Saved removes an accidental report; it does not refund a payment. Registered history uses the current year in the user's timezone; sample profiles retain their demo clock.
+
+Saved separates confirmed benefits from estimates and shows each purchase, card, amount, and cashback. These estimates are not issuer-posted rewards or real money earned from sandbox payments. The existing sample reward lifecycle still moves an estimate to confirmed benefits without counting it twice, and refunds reverse that sample benefit. A checkout-history outage is shown explicitly instead of claiming the partial total is complete.
+
 ## Configure an authorized test workspace
 
 Use Node.js 20+ and an existing authorized Stripe sandbox. No script provisions an account, requests Visa access, or creates provider credentials. Copy configuration from `.env.example` into the gitignored `.env`; use your secret manager when appropriate.

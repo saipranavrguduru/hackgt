@@ -141,6 +141,22 @@ export function createCheckoutService({repository,merchant,provider,authAdapter,
     const rows=(await query('SELECT id FROM pp_checkout_intents WHERE subject_key=$1 ORDER BY created_at DESC LIMIT 20',[principal.subjectKey])).rows;
     return Promise.all(rows.map(row=>getStatus(principal,row.id)));
   }
+  async function listRewardPurchases(principal) {
+    await assertPrincipal(principal);
+    const rows=(await query(`SELECT o.id,o.intent_id,o.amount_cents,o.confirmed_at,o.data,i.data AS intent_data
+      FROM pp_checkout_orders o JOIN pp_checkout_intents i ON i.id=o.intent_id AND i.subject_key=o.subject_key
+      WHERE o.subject_key=$1 AND o.state='confirmed' AND o.confirmed_at IS NOT NULL AND o.currency='USD'
+      ORDER BY o.confirmed_at DESC,o.id`,[principal.subjectKey])).rows;
+    // Read persisted purchase evidence rather than recalculating against today's
+    // Wallet/catalog. One row per order also deduplicates webhook and page retries.
+    return rows.map(row=>{
+      const cart=row.intent_data?.permission?.cart || {},card=row.data?.card || {};
+      return {id:row.id,orderId:row.id,intentId:row.intent_id,
+        name:typeof cart.name==='string'?cart.name:'Test purchase',merchantName:'PerkPilot Test Store',sourceMerchantName:typeof cart.sourceMerchantName==='string'?cart.sourceMerchantName:null,
+        amountCents:row.amount_cents,currency:'USD',estimatedRewardCents:Number.isSafeInteger(card.estimatedRewardCents)&&card.estimatedRewardCents>=0?card.estimatedRewardCents:0,
+        confirmedAt:Number(row.confirmed_at),card:{productId:typeof card.productId==='string'?card.productId:null,last4:typeof card.last4==='string'?card.last4:null,brand:typeof card.brand==='string'?card.brand:null,rateBps:Number.isSafeInteger(card.rateBps)&&card.rateBps>=0?card.rateBps:null},providerMode:'test'};
+    });
+  }
   async function getStatus(principal,id) {
     const intent=await ownedIntent(principal,id);
     const row=(await query('SELECT * FROM pp_checkout_orders WHERE intent_id=$1',[id])).rows[0];
@@ -296,5 +312,5 @@ export function createCheckoutService({repository,merchant,provider,authAdapter,
     if(['queued','running'].includes(intent.state)){await setState(intent,'agent_failed',{code:'AGENT_FAILED',message:messages.AGENT_FAILED});await query('UPDATE pp_checkout_intents SET revoked_at=$1 WHERE id=$2',[now(),intent.id]);await event(intent.id,typeof error?.code==='string'?error.code:'AGENT_FAILED','agent_failed');}
     });
   }
-  return {startEnrollment,completeEnrollment,listMethods,listProducts,importCatalogProduct,removeMethod,createPreview,authorize,readCart,rankCards,executePurchase,getStatus,listIntents,getPaymentAction,cancel,reconcile,acceptWebhook,maintenance,revokeSession,markAgentFailed};
+  return {startEnrollment,completeEnrollment,listMethods,listProducts,importCatalogProduct,removeMethod,createPreview,authorize,readCart,rankCards,executePurchase,getStatus,listIntents,listRewardPurchases,getPaymentAction,cancel,reconcile,acceptWebhook,maintenance,revokeSession,markAgentFailed};
 }

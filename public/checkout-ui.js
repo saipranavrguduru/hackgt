@@ -22,10 +22,11 @@
     }
     return window.Stripe(key);
   }
-  function mount({root,api,onWalletChanged=()=>{},walletCards=[],cardProducts=[],identity=null,sample=false,selection=null}) {
+  function mount({root,api,onWalletChanged=()=>{},onPurchaseConfirmed=()=>{},walletCards=[],cardProducts=[],identity=null,sample=false,selection=null}) {
     if(!root || typeof api!=='function')throw new Error('Checkout needs a root and portal API.');
     current?.dispose({clearRecovery:false});
     const selected=selection==null?null:{sku:selection.sku,variantId:selection.variantId};
+    const announcedConfirmations=new Set();
     let alive=true,busy=false,loading=true,storeReady=false,setupNotice='',poll=null,capabilities=null,products=[],destinations=[],methods=[],preview=null,intent=null,error='',enrollment=null,authorizationUnknown=pendingApprovals.has(identity);
     const request=(path,method='GET',body)=>api(BASE+path,method,body);
     const productName=id=>cardProducts.find(c=>c.id===id)?.name || walletCards.find(c=>c.productId===id)?.name || String(id||'Wallet card').replaceAll('-',' ');
@@ -43,8 +44,11 @@
     const matchesSelection=view=>!selected || view?.cart?.sku===selected.sku && view?.cart?.variantId===selected.variantId;
     const previousPurchase=()=>intent && !matchesSelection(intent);
     const status=()=>error || intent?.error?.message || (intent?`${previousPurchase()?'Previous purchase · ':''}${names[intent.state]||'Checking payment status'}`:'');
-    function acceptIntent(view,cart=null) {
+    function acceptIntent(view,cart=null,freshApproval=false) {
+      const wasConfirmed=intent?.id===view.id && intent.state==='confirmed' && intent.order?.confirmedAt!=null;
+      const notify=(freshApproval || intent?.id===view.id) && !wasConfirmed && view.state==='confirmed' && view.order?.confirmedAt!=null && !announcedConfirmations.has(view.id);
       intent={...view,cart:view.cart || (preview && view.previewId===preview.id?preview.cart:null) || cart || (intent?.id===view.id?intent.cart:null)};
+      if(notify){announcedConfirmations.add(view.id);queueMicrotask(async()=>{if(!alive)return;try{await onPurchaseConfirmed(view);}catch{/* A savings refresh cannot change provider-confirmed payment status. */}});}
     }
     function render() {
       if(!alive)return;
@@ -109,7 +113,7 @@
       const view=await request(`/intents/${encodeURIComponent(id)}`);if(!alive)return null;
       if(pending && view.previewId!==pending.previewId)return null;
       if(!pending && terminal.has(view.state) && !matchesSelection(view))return null;
-      acceptIntent(view,pending?.cart);authorizationUnknown=false;if(pendingApprovals.get(identity)===pending)pendingApprovals.delete(identity);remember(view.id);return view;
+      acceptIntent(view,pending?.cart,Boolean(pending));authorizationUnknown=false;if(pendingApprovals.get(identity)===pending)pendingApprovals.delete(identity);remember(view.id);return view;
     }
     async function refreshStatus() {
       if(!intent?.id)return;
@@ -167,7 +171,7 @@
         catch(err){if(!alive)return;if(err.status && err.status<500){if(pendingApprovals.get(identity)===pending)pendingApprovals.delete(identity);authorizationUnknown=false;throw err;}try{view=await discoverIntent({onlyUnknown:true});}catch{/* Poll only for the exact original saved approval. */}if(!view){error='The approval response was interrupted. Checking the existing purchase before another can start.';return null;}}
         if(!alive){if(current?.identity===identity && pendingApprovals.get(identity)===pending)await current.reconcile().catch(()=>{});return;}
         if(view.previewId!==pending.previewId){error='The approval response could not be matched. Checking the existing purchase.';return null;}
-        if(pendingApprovals.get(identity)===pending)pendingApprovals.delete(identity);authorizationUnknown=false;acceptIntent(view,pending.cart);remember(view.id);render();root.querySelector('[data-checkout-status]')?.focus();return view;
+        if(pendingApprovals.get(identity)===pending)pendingApprovals.delete(identity);authorizationUnknown=false;acceptIntent(view,pending.cart,true);remember(view.id);render();root.querySelector('[data-checkout-status]')?.focus();return view;
       });},
       async startEnrollment(walletCardId,consent){return action(async()=>{
         if(consent!==true)throw new Error('Explicit consent is required to save a test payment method.');

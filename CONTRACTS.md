@@ -15,7 +15,7 @@ Local portal identity uses an HttpOnly `perkpilot_session` cookie. Every private
 | Research | `POST /research/sessions`; `GET/PATCH /research/sessions/:id`; `GET /research/sessions/:id/candidates`, `/research/products/:id/brief`; `POST /research/comparisons`; `GET /research/comparisons/:id`; `GET/POST /research/watchlist`; `DELETE /research/watchlist/:id` |
 | Quotes | `POST /commerce/quotes`; `GET /commerce/quotes/:id` |
 | Checkout | `POST /checkout/sessions`; `GET /checkout/sessions/:id`; `POST /checkout/sessions/:id/confirm` |
-| Rewards | `GET /rewards/purchases`, `/rewards/purchases/:id`, `/rewards/summary` |
+| Rewards | `GET /rewards/purchases`, `/rewards/purchases/:id`, `/rewards/summary`; `POST /rewards/card-purchases`; `DELETE /rewards/card-purchases/:id` |
 | Assistant | `POST /assistant/messages` with `{message}` |
 | Extension | `POST /extension/pairings`, `/extension/pairings/:id/approve`, `/extension/pairings/:id/exchange`; `DELETE /extension/session` |
 | Demo | `POST /demo/offers/publish`, `/demo/purchases/:id/events`, `/demo/listings/price`, `/demo/reset` |
@@ -31,6 +31,10 @@ Quote plans expose `checkoutCents`, `statementCreditCents`, `rewardCents`, `effe
 Checkout creation takes `{quoteId,cardId}`. Confirmation requires `{approved:true,outcome?:"approved"|"declined"|"processing"}` from portal authentication. Repeated confirmation returns the same purchase. Extension tokens can prepare checkout but cannot approve it. Registered users' self-reported cards cannot execute payments.
 
 Demo events are `settled`, `qualified`, `credit_posted`, `reward_posted`, and `returned`/`refunded`, with an optional stable `eventId`. Event identity and benefit identity both deduplicate recognition. Returns append signed reversal entries. Confirmed totals exclude expected benefits and use the user's demo-calendar year.
+
+Savings `totalCents` and `confirmedCents` remain confirmed ledger benefits. The UI uses `trackedTotalCents = confirmedCents + estimatedCashbackCents`, with separate `checkoutCashbackCents`, `reportedCashbackCents`, and `sampleCashbackCents`. `rewardPurchases` contains safe history for those estimates; `checkoutRewardsUnavailable` marks an incomplete read. Registered summaries use the current year in the user's timezone; sample summaries retain the fixture clock. Confirmed sandbox orders are read from the checkout database by authenticated owner, using their immutable stored cashback; payment history is not copied into the posted-benefit ledger.
+
+Explicit manual purchase recording takes `{requestId,cardId,category,placeName?,amountCents}` at `POST /rewards/card-purchases`. `requestId` is a stable UUID v4 per reported purchase; retries return the same record, and conflicting details return 409. Category/amount follow the location comparison limits. The server uses the authenticated user's owned card and canonical reward rules; submitted rates, cashback, or user IDs are rejected. The response is `{purchase,duplicate}`. DELETE marks an owned record removed while preserving its idempotency key, so late retries cannot restore it. These self-reported estimates save the confirmed place name, not GPS coordinates, and do not prove a payment or issuer reward. Recommendations alone remain read-only.
 
 Pairing creation returns `{id,secret,approvalUrl,expiresAt}`; the portal explicitly approves the ID. A one-use exchange of `{secret}` returns a 30-minute bearer token. The token scope permits quotes, offer activation, product briefs, checkout preparation, and revocation only.
 
