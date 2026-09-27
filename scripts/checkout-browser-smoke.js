@@ -51,7 +51,15 @@ try {
   await enroll(activeCard);await enroll(otherCard);
   const review=async()=>{await page.locator('[data-checkout-action="preview"]:not([disabled])').click();await page.locator('[name="maximum"]').waitFor();await page.locator('[name="maximum"]').fill('110.00');await page.getByRole('button',{name:'Buy with PerkPilot — up to $110.00'}).waitFor();};
   const screenshot=async name=>{mkdirSync('test-results/checkout-browser',{recursive:true});await page.screenshot({path:`test-results/checkout-browser/${name}.png`,fullPage:true});};
-  await review();assert.equal(await page.locator('.checkout-card-set li').count(),2);await screenshot('permission-desktop');
+  await review();
+  const bestCard=page.locator('[data-checkout-best-card]');assert.equal(await bestCard.count(),1);
+  assert.match(await bestCard.innerText(),/Best enrolled card for this test purchase/i);
+  assert.match(await bestCard.innerText(),/Active Cash/);
+  assert.match(await bestCard.innerText(),/2% base reward/);
+  assert.match(await bestCard.innerText(),/Estimated reward \$2\.08/);
+  assert.equal(await page.locator('.checkout-card-set li').count(),1);
+  assert.match(await page.locator('.checkout-card-set li').innerText(),/Quicksilver/);
+  await screenshot('permission-desktop');
   await page.getByRole('button',{name:'Buy with PerkPilot — up to $110.00'}).click();await page.locator('[data-checkout-receipt]').waitFor();
   assert.equal(fixture.provider.calls.length,1);assert.equal(fixture.provider.calls[0].paymentMethodId,(await fixture.repository.query('SELECT payment_method_id FROM pp_checkout_methods WHERE subject_key=$1 AND card_id=$2',['portal:'+state.user.id,activeCard.id])).rows[0].payment_method_id);
   assert.equal(fixture.provider.calls[0].amountCents,10400);assert.equal(modelCalls,3);assert.equal(intentPosts.length,1);assert.deepEqual(Object.keys(intentPosts[0]).sort(),['approved','maxAmountCents','previewId']);await screenshot('receipt-desktop');

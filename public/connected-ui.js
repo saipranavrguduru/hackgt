@@ -4,6 +4,8 @@
   const state = { initialized:false, loading:null, identity:null, generation:0, session:null, dashboard:null, products:null, answer:null, lastSearchQuery:null, query:'', error:null, searchError:null, answerError:null };
   let plaidLoader;
   let productSequence=0, openedProductId=null, productController=null;
+  let recommendationSequence=0, recommendationContext=null;
+  const rewardCategories=[['other','Other / unsure'],['dining','Dining'],['groceries','Groceries'],['gas','Gas'],['drugstores','Drugstores']];
   const app = () => window.App;
   const esc = value => app().escapeHtml(value ?? '');
   const money = value => app().money(value);
@@ -109,8 +111,38 @@
     return money(product.priceCents);
   }
   function safeLink(value) { try{const url=new URL(value);return ['http:','https:'].includes(url.protocol) && !url.username && !url.password?url.href:null;}catch{return null;} }
+  const rewardRate=value=>Number.isSafeInteger(value)&&value>=0?`${value/100}%`:'Rate unavailable';
+  function recommendationMarkup(result,category) {
+    const cards=app().dataArray(result.cards),best=cards.find(card=>card.cardId===result.bestCardId);
+    const amount=Number.isSafeInteger(result.amountCents),categoryLabel=result.categoryLabel || 'Other / unsure';
+    const source=best && safeLink(best.categorySourceUrl || best.sourceUrl);
+    const alternatives=cards.filter(card=>card.cardId!==best?.cardId);
+    const form=`<form id="connected-product-recommendation-form" class="explore-reward-form"><label class="field"><span>Merchant category</span><select name="category">${rewardCategories.map(([value,label])=>`<option value="${value}"${value===category?' selected':''}>${label}</option>`).join('')}</select></label><button class="button secondary" type="submit">Update comparison</button></form>`;
+    if(!best)return `<h3>Your best card starts in Wallet</h3><p>Add a card you own to see which earns the most for this find.</p><button class="button secondary" type="button" data-action="add-card">Add a wallet card</button>`;
+    const walletCard=app().dataArray(app().state.data.cards).find(card=>card.id===best.cardId);
+    const product=app().dataArray(app().state.data.cardProducts).find(item=>item.id===walletCard?.productId);
+    const art=walletCard && product && window.CardsUI?`<div class="explore-reward-art">${window.CardsUI.art(walletCard,product)}</div>`:'';
+    return `<div class="explore-reward-winner">${art}<div><span class="eyebrow">Best card in your Wallet</span><h3>${esc(best.cardName)}</h3><p class="explore-reward-rate">${rewardRate(best.rewardBps)} <span>estimated cash back</span></p>${amount&&Number.isSafeInteger(best.rewardCents)?`<p><strong>${money(best.rewardCents)}</strong> estimated on ${money(result.amountCents)} merchandise · excludes tax and shipping.</p>`:'<p>Comparing rates only; a supported USD merchandise price is unavailable.</p>'}<p class="fine-note">${best.basis==='category'?`If the merchant codes this purchase as ${esc(categoryLabel)}. Base fallback: ${rewardRate(best.baseRewardBps)}${amount&&Number.isSafeInteger(best.baseRewardCents)?` (${money(best.baseRewardCents)})`:''}.`:'Published base purchase rate. Merchant category is not verified by this listing.'}</p></div></div><p class="explore-reward-reason">${esc(result.explanation)}</p>${form}<p class="fine-note">This compares cards in your Wallet for the listed retailer. The sandbox purchase below automatically uses the best enrolled test card at its base rate.</p><details class="explore-reward-details"><summary>Compare cards &amp; reward conditions</summary>${alternatives.map(card=>`<div class="explore-reward-alternative"><span>${esc(card.cardName)}</span><strong>${rewardRate(card.rewardBps)}${amount&&Number.isSafeInteger(card.rewardCents)?` · ${money(card.rewardCents)}`:''}</strong></div>`).join('')}<p>${esc(best.limitations || 'Issuer eligibility and merchant coding determine rewards.')}</p><p>${esc(result.disclaimer || 'Rewards are estimates, not posted benefits or a discount. Category bonuses depend on issuer eligibility.')}</p>${source?`<a class="text-button" href="${esc(source)}" target="_blank" rel="noopener noreferrer">Issuer reward rules ${icon('external')}</a>`:''}</details>`;
+  }
+  async function refreshProductRecommendation(category) {
+    ensureIdentity();
+    const context=recommendationContext;
+    if(!context || !context.current())return;
+    if(category!==undefined)context.category=rewardCategories.some(([value])=>value===category)?category:'other';
+    const request=++recommendationSequence,root=context.root,product=context.product;
+    const current=()=>request===recommendationSequence && context===recommendationContext && context.current();
+    root.innerHTML='<p class="fine-note">Comparing the cards in your Wallet…</p>';
+    try {
+      const amount=product.currency==='USD' && Number.isSafeInteger(product.priceCents) && product.priceCents>0 && product.priceCents<=100000000?{amountCents:product.priceCents}:{};
+      const result=await app().api('/location/recommendations','POST',{category:context.category,placeName:String(product.merchantName || '').slice(0,120),...amount});
+      if(current())root.innerHTML=recommendationMarkup(result,context.category);
+    } catch(error) {
+      if(current())root.innerHTML=`<h3>Card comparison unavailable</h3><p>${esc(error.message || 'Your cards could not be compared.')}</p><button type="button" class="button secondary" data-action="connected-product-recommendation-retry">Try card comparison again</button>`;
+    }
+  }
   function closeProduct() {
     productSequence++;openedProductId=null;
+    recommendationSequence++;recommendationContext=null;
     productController?.dispose?.({clearRecovery:false});productController=null;
   }
   async function openProduct(id) {
@@ -120,14 +152,18 @@
     const image=safeLink(product.imageUrl),url=safeLink(product.url);
     const hero=`<div class="explore-product-summary">${image?`<div class="explore-product-image"><img src="${esc(image)}" alt="${esc(product.name)}" referrerpolicy="no-referrer"></div>`:`<div class="explore-product-image">${icon('bag')}</div>`}<div><span class="eyebrow">Your Explore find</span><p class="explore-product-price">${productPrice(product)}</p><p class="fine-note">Observed merchandise price · ${esc(product.merchantName)}<br>${esc(product.source)}${product.observedAt?` · ${esc(new Date(product.observedAt).toLocaleDateString())}`:''}</p>${url?`<a class="text-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open retailer listing ${icon('external')}</a>`:''}</div></div><div class="explore-sandbox-note"><span class="pill neutral">Sandbox checkout</span><p>Try this product through PerkPilot Test Store with your best enrolled test card. Test totals include 10% test tax and $5 test shipping. No real money moves and no order is sent to ${esc(product.merchantName || 'the retailer')}.</p></div>`;
     const unavailable=product.checkoutUnavailableReason || 'Sandbox checkout is unavailable for this listing. Refresh your search for eligible products priced within the $500 total limit.';
-    app().showSheet(product.name,hero+(product.checkoutReference?'<div data-explore-checkout aria-live="polite"><p class="fine-note">Preparing your selected product…</p></div>':`<div class="explore-checkout-unavailable" role="status"><h3>Checkout unavailable</h3><p>${esc(unavailable)}</p><button type="button" class="button secondary" data-action="connected-product-search">Refresh search</button></div>`),{owner:'explore-checkout'});
+    app().showSheet(product.name,hero.replace('<div class="explore-sandbox-note">','<section class="explore-recommendation" data-explore-recommendation aria-label="Best wallet card for this product" aria-live="polite"></section><div class="explore-sandbox-note">')+(product.checkoutReference?'<div data-explore-checkout aria-live="polite"><p class="fine-note">Preparing your selected product…</p></div>':`<div class="explore-checkout-unavailable" role="status"><h3>Checkout unavailable</h3><p>${esc(unavailable)}</p><button type="button" class="button secondary" data-action="connected-product-search">Refresh search</button></div>`),{owner:'explore-checkout'});
     openedProductId=id;
     const request=++productSequence,generation=state.generation,root=document.querySelector('[data-explore-checkout]');
-    if(!product.checkoutReference)return;
-    const current=()=>{
+    const currentSheet=()=>{
       ensureIdentity();const sheet=document.querySelector('#sheet');
-      return request===productSequence && generation===state.generation && app().state.page==='explore' && sheet?.open && sheet.dataset.owner==='explore-checkout' && root?.isConnected;
+      return request===productSequence && generation===state.generation && app().state.page==='explore' && sheet?.open && sheet.dataset.owner==='explore-checkout';
     };
+    const recommendationRoot=document.querySelector('[data-explore-recommendation]');
+    recommendationContext={product,category:'other',root:recommendationRoot,current:()=>currentSheet() && recommendationRoot?.isConnected};
+    const recommendation=refreshProductRecommendation();
+    if(!product.checkoutReference){await recommendation;return;}
+    const current=()=>currentSheet() && root?.isConnected;
     try {
       const result=await app().api('/agent-checkout/catalog-products','POST',{checkoutReference:product.checkoutReference});
       if(!current())return;
@@ -138,6 +174,7 @@
       const message=error.code==='NOT_FOUND'?'Sandbox checkout is not enabled. Start the project with checkout enabled, then try again.':error.message;
       root.innerHTML=`<div class="explore-checkout-unavailable" role="alert"><h3>Could not prepare checkout</h3><p>${esc(message)}</p><div class="product-actions"><button type="button" class="button secondary" data-action="connected-product" data-id="${esc(id)}">Try again</button><button type="button" class="text-button" data-action="connected-product-search">Refresh search</button></div></div>`;
     }
+    await recommendation;
   }
 
   function dashboardPanel() {
@@ -202,6 +239,7 @@
   async function action(name, target) {
     switch(name) {
       case 'connected-product':await openProduct(target.dataset.id);break;
+      case 'connected-product-recommendation-retry':await refreshProductRecommendation();break;
       case 'connected-product-search':app().closeSheet();await search(state.query);break;
       case 'connected-refresh':await refresh();break;
       case 'connected-consent':await api('/consent','POST',{consent:!state.dashboard.user.consent});await refresh();app().toast('Connected insight preference saved.');break;
@@ -229,6 +267,7 @@
 
   async function submit(form, fields) {
     switch(form.id) {
+      case 'connected-product-recommendation-form':await refreshProductRecommendation(fields.category);break;
       case 'connected-auth-form':await authenticate('login',fields);update();app().toast('Existing connected profile linked.');break;
       case 'connected-location-form':await api('/profile/location','PATCH',{location:fields.location});state.products=null;state.lastSearchQuery=null;await refresh();app().toast(fields.location?'Shopping location saved.':'Shopping location cleared.');break;
       case 'connected-search-form':await search(fields.query);break;
@@ -254,5 +293,5 @@
     update();
   }
 
-  window.ConnectedUI={render,renderExplore,action,submit,search,authenticate,logout,refresh,reset,openProduct,closeProduct,currentProductId:()=>openedProductId,productById:id=>state.products?.products?.find(product=>product.id===id)};
+  window.ConnectedUI={render,renderExplore,action,submit,search,authenticate,logout,refresh,reset,openProduct,closeProduct,refreshProductRecommendation,currentProductId:()=>openedProductId,productById:id=>state.products?.products?.find(product=>product.id===id)};
 })();

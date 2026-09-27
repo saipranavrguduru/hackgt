@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false,selection=null,storeProducts=null}={}) {
+function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false,selection=null,storeProducts=null,previewCards=[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208,rateBps:200}]}={}) {
   const requests=[],timers=[],store=new Map(recovered?[['perkpilot-checkout-intent',recovered]]:[]);
   const root={innerHTML:'',addEventListener(){},removeEventListener(){},querySelector(){return null;}};
   const cart={sku:'everyday-headphones',variantId:'black',quantity:1,name:'Headphones <script>evil()</script>',merchantName:'PerkPilot Test Store',currency:'USD',merchandiseCents:9000,taxCents:900,shippingCents:500,totalCents:10400,destinationLabel:'Saved test destination'};
@@ -15,7 +15,7 @@ function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostRespo
     if(path.endsWith('/capabilities'))return capabilities;
     if(path.endsWith('/products'))return {products:(storeProducts||[{...cart,stock:100}]).map(p=>({...p})),destinations:[{id:'destination',label:'Atlanta test address'}]};
     if(path.endsWith('/methods')&&method==='GET')return savedMethods;
-    if(path.endsWith('/previews')){const product=storeProducts?.find(p=>p.sku===body.sku&&p.variantId===body.variantId);const previewCart=product?{...cart,...product,quantity:body.quantity,merchandiseCents:product.merchandiseCents*body.quantity,taxCents:product.taxCents*body.quantity,totalCents:(product.merchandiseCents+product.taxCents)*body.quantity+product.shippingCents}:cart;return {id:lostAfterSuccess?`preview-${++previewCount}`:'preview',cart:previewCart,cards:[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208}],expiresAt:Date.now()+300000};}
+    if(path.endsWith('/previews')){const product=storeProducts?.find(p=>p.sku===body.sku&&p.variantId===body.variantId);const previewCart=product?{...cart,...product,quantity:body.quantity,merchandiseCents:product.merchandiseCents*body.quantity,taxCents:product.taxCents*body.quantity,totalCents:(product.merchandiseCents+product.taxCents)*body.quantity+product.shippingCents}:cart;return {id:lostAfterSuccess?`preview-${++previewCount}`:'preview',cart:previewCart,cards:previewCards,expiresAt:Date.now()+300000};}
     if(path.endsWith('/intents')&&method==='GET')return discovered;
     if(path.endsWith('/intents')&&method==='POST') {approvalCount++;if(delayed)await new Promise(r=>{release=r;});if(lostAfterSuccess&&approvalCount===1){const prior={id:'prior-confirmed',previewId:body.previewId,state:'confirmed',events:[],order:{confirmedAt:Date.now()},maxAmountCents:body.maxAmountCents};discovered.push(prior);return prior;}if(lostAfterSuccess)throw new Error('Response was lost before commit.');if(lostResponse){discovered.push({id:'accepted-intent',previewId:body.previewId,state:'payment_pending'});throw new Error('Response was lost.');}const value={id:'intent',previewId:body.previewId,state:'queued',events:[],order:null,maxAmountCents:body.maxAmountCents};discovered.push(value);return value;}
     if(path.endsWith('/enrollments'))return {id:'setup',clientSecret:'setup_secret_sensitive'};
@@ -236,4 +236,62 @@ test('switching selected products during approval recovers the first purchase wi
   assert.match(next.root.innerHTML,/Trail Shoes &lt;blue&gt;/);
   await assert.rejects(next.ui.preparePreview({quantity:1,destinationId:'destination'}),/Finish or cancel/);
   assert.equal(f.requests.filter(r=>r.path.endsWith('/intents')&&r.method==='POST').length,1);
+});
+
+test('selected purchase highlights the server-ranked enrolled card before authorization and keeps alternatives',async()=>{
+  const f=fixture({selection:shoeSelection,storeProducts:catalogProducts,previewCards:[
+    {cardId:'card-z',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:274,rateBps:200},
+    {cardId:'card-a',productId:'freedom-unlimited',brand:'visa',last4:'1111',estimatedRewardCents:206,rateBps:150}
+  ]});await f.ui.ready;
+  assert.doesNotMatch(f.root.innerHTML,/data-checkout-best-card/);
+  await f.ui.preparePreview({quantity:1,destinationId:'destination'});
+  const highlight=f.root.innerHTML.match(/<aside[^>]*data-checkout-best-card[^>]*>([\s\S]*?)<\/aside>/)?.[1];
+  assert.ok(highlight,'Review visibly identifies the best enrolled test card');
+  assert.match(highlight,/Best enrolled card for this test purchase/);
+  assert.match(highlight,/Active Cash.*4242/);
+  assert.match(highlight,/2% base reward/);
+  assert.match(highlight,/\$2\.74/);
+  assert.match(highlight,/Highest estimated base reward/);
+  assert.doesNotMatch(highlight,/1111/);
+  assert.match(f.root.innerHTML,/Other enrolled test cards/);
+  assert.match(f.root.innerHTML,/1111.*<span>.*\$2\.06/);
+  assert.match(f.root.innerHTML,/Current total<\/dt><dd>\$137\.00/);
+  assert.match(f.root.innerHTML,/name="maximum"[^>]*value="137.00"/);
+  assert.equal(f.requests.some(r=>r.path.endsWith('/intents')&&r.method==='POST'),false);
+  await f.ui.buy(14000);
+  const sent=f.requests.find(r=>r.path.endsWith('/intents')&&r.method==='POST');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.body)),{previewId:'preview',maxAmountCents:14000,approved:true});
+});
+
+test('equal reward estimates disclose the tie and preserve the server first card',async()=>{
+  const f=fixture({previewCards:[
+    {cardId:'card-z',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208,rateBps:200},
+    {cardId:'card-a',productId:'double-cash',brand:'mastercard',last4:'1111',estimatedRewardCents:208,rateBps:200}
+  ]});await f.ui.ready;await f.ui.preparePreview({sku:'everyday-headphones',variantId:'black',quantity:1,destinationId:'destination'});
+  const highlight=f.root.innerHTML.match(/<aside[^>]*data-checkout-best-card[^>]*>([\s\S]*?)<\/aside>/)?.[1];
+  assert.ok(highlight);
+  assert.match(highlight,/Active Cash.*4242/);
+  assert.match(highlight,/Tied.*same estimated reward/i);
+  assert.match(f.root.innerHTML,/1111.*<span>.*\$2\.08/);
+  assert.doesNotMatch(highlight,/extra|more than|additional savings/i);
+});
+
+test('missing optional rate never becomes a fabricated zero rate in the best enrolled card highlight',async()=>{
+  for(const rateBps of [undefined,null,'200',-1]){
+    const f=fixture({previewCards:[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208,rateBps}]});
+    await f.ui.ready;await f.ui.preparePreview({sku:'everyday-headphones',variantId:'black',quantity:1,destinationId:'destination'});
+    const highlight=f.root.innerHTML.match(/<aside[^>]*data-checkout-best-card[^>]*>([\s\S]*?)<\/aside>/)?.[1];
+    assert.ok(highlight);assert.match(highlight,/\$2\.08/);
+    assert.doesNotMatch(highlight,/NaN|undefined|(?:0|2)%/);
+    assert.match(highlight,/rate unavailable/i);
+  }
+});
+
+test('a preview without ranked cards reports no enrolled recommendation instead of inventing a winner',async()=>{
+  for(const previewCards of [[],null]){
+    const f=fixture({previewCards});await f.ui.ready;await f.ui.preparePreview({sku:'everyday-headphones',variantId:'black',quantity:1,destinationId:'destination'});
+    assert.match(f.root.innerHTML,/No enrolled card recommendation/);
+    assert.doesNotMatch(f.root.innerHTML,/data-checkout-best-card|Best enrolled card for this test purchase/);
+    assert.match(f.root.innerHTML,/Current total<\/dt><dd>\$104\.00/);
+  }
 });

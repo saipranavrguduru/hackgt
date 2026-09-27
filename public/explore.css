@@ -13,6 +13,23 @@
 .explore-product-image .icon{width:48px;height:48px;color:var(--green)}
 .explore-product-price{font-size:32px;font-weight:600;letter-spacing:-1px;color:var(--ink);margin:8px 0}
 .explore-product-summary .text-button{margin-top:10px}
+.explore-recommendation{padding:24px;margin-bottom:24px;border:1px solid var(--line);border-radius:18px;background:var(--sage-light,#f3f6ef)}
+.explore-recommendation h3{margin:6px 0 10px;font-size:21px;overflow-wrap:anywhere}
+.explore-recommendation p{font-size:13px;line-height:1.65;margin:10px 0}
+.explore-reward-winner{display:flex;gap:24px;align-items:center}
+.explore-reward-winner>div{min-width:0}
+.explore-reward-art{width:240px;flex:none}
+.explore-reward-art .bank-card{width:100%;min-width:0}
+.explore-recommendation .explore-reward-rate{font-size:28px;font-weight:600;color:var(--green);margin:4px 0}
+.explore-reward-rate span{font-size:12px;font-weight:400}
+.explore-reward-reason{color:var(--ink)}
+.explore-reward-form{display:flex;gap:14px;align-items:end;margin:18px 0}
+.explore-reward-form .field{flex:1;margin:0}
+.explore-reward-form .button{flex:none}
+.explore-reward-details{border-top:1px solid var(--line);margin-top:16px;padding-top:14px;font-size:12px}
+.explore-reward-details summary{cursor:pointer;color:var(--green);font-weight:500}
+.explore-reward-alternative{display:flex;gap:18px;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)}
+.explore-reward-alternative strong{flex:none}
 .explore-sandbox-note{padding:18px 20px;background:var(--sage-light,#f3f6ef);border:1px solid var(--line);border-radius:14px;margin-bottom:28px}
 .explore-sandbox-note p{font-size:12px;line-height:1.7;margin:10px 0 0;color:var(--body)}
 [data-explore-checkout] .checkout-panel-selected{padding:0;background:transparent;border-radius:0}
@@ -26,6 +43,11 @@
   .explore-product-image{padding:10px;border-radius:13px}
   .explore-product-price{font-size:27px}
   .explore-product-summary .eyebrow{font-size:8px}
+  .explore-recommendation{padding:18px}
+  .explore-reward-winner{display:block}
+  .explore-reward-art{width:min(240px,100%);margin-bottom:18px}
+  .explore-reward-form{display:block}
+  .explore-reward-form .button{margin-top:12px;width:100%}
   .explore-sandbox-note{padding:15px}
   .connected-product .product-actions .button{width:100%;justify-content:center}
   .explore-checkout-unavailable .product-actions{align-items:flex-start}

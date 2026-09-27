@@ -18,7 +18,7 @@ fixture.provider.verifyAccount=async()=>({id:fixture.provider.accountId,mode:'te
 const listing=(id,name,priceCents)=>({id,name,priceCents,currency:'USD',merchantName:'Browser Fixture Retailer',source:'Isolated browser catalog',url:`https://example.test/products/${id}`,imageUrl:`${origin}/explore-fixture/${id}.svg`,priceNote:'Observed browser fixture price',observedAt:new Date().toISOString()});
 const products=[listing('travel-headphones','Explore travel headphones',12999),listing('running-shoes','Explore running shoes',4950),listing('over-limit','Explore premium telescope',60000)];
 let app,browser,modelCalls=0;
-const requests=[],pageErrors=[];
+const requests=[],recommendationRequests=[],pageErrors=[];
 try {
   app=await startCheckoutApplication({port,storePort:port+1,demoOptions:{persist:false},connectedOptions:{db,
     plaid:{configured:false},ebay:{configured:false},shopify:{configured:false},
@@ -37,8 +37,8 @@ try {
   });
   await context.route('**/explore-fixture/*.svg',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#edf1e8"/><circle cx="200" cy="150" r="70" fill="#6d795c"/></svg>'}));
   const page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>pageErrors.push(error.message));
-  page.on('request',request=>{const path=new URL(request.url()).pathname;if(path.startsWith('/api/v1/agent-checkout/'))requests.push({path,method:request.method(),...(request.method()==='POST'?{body:request.postDataJSON()}:{})});});
-  const sheet=page.locator('#sheet[data-owner="explore-checkout"]'),checkout=sheet.locator('[data-explore-checkout]');
+  page.on('request',request=>{const path=new URL(request.url()).pathname;if(path.startsWith('/api/v1/agent-checkout/'))requests.push({path,method:request.method(),...(request.method()==='POST'?{body:request.postDataJSON()}:{})});if(path==='/api/v1/location/recommendations'&&request.method()==='POST')recommendationRequests.push(request.postDataJSON());});
+  const sheet=page.locator('#sheet[data-owner="explore-checkout"]'),checkout=sheet.locator('[data-explore-checkout]'),recommendation=sheet.locator('[data-explore-recommendation]');
   const screenshot=async name=>{mkdirSync('test-results/explore-checkout-browser',{recursive:true});await page.screenshot({path:`test-results/explore-checkout-browser/${name}.png`,fullPage:false});};
   const api=async(path,body,method='POST')=>{const response=await context.request.fetch(origin+'/api/v1'+path,{method,headers:{Origin:origin},...(body===undefined?{}:{data:body})});const value=await response.json();assert.equal(response.ok(),true,JSON.stringify(value));return value;};
   const closeProduct=async()=>{await sheet.locator('[data-action="close"]').click();await page.locator('#sheet[open]').waitFor({state:'hidden'});};
@@ -70,6 +70,13 @@ try {
     await sheet.waitFor();await checkout.locator('[data-checkout-selected-product]').waitFor();
     assert.match(await checkout.locator('[data-checkout-selected-product]').innerText(),/Explore travel headphones/,'Adding a card must return to the same selected Explore product.');
     const state=await api('/bootstrap',undefined,'GET'),card=state.cards.find(card=>card.productId===productId);assert.ok(card);
+    await recommendation.getByText(/Wells Fargo Active Cash/).first().waitFor();const advisory=await recommendation.innerText();
+    assert.match(advisory,/2(?:\.0+)?%/);assert.match(advisory,/\$2\.60/,'Advisory cash back is based on the $129.99 merchandise price.');
+    if(productId==='active-cash'){
+      assert.equal(await checkout.locator('[data-checkout-action="remove-method"]').count(),0,'Wallet recommendations must work before Stripe enrollment.');
+      await recommendation.scrollIntoViewIfNeeded();await screenshot('recommendation-desktop');
+      await page.setViewportSize({width:390,height:844});await recommendation.scrollIntoViewIfNeeded();await assertFit();await screenshot('recommendation-mobile');await page.setViewportSize({width:1440,height:1000});
+    }
     await enroll(card);return card;
   };
 
@@ -81,6 +88,8 @@ try {
   await openProduct('over-limit','action');await sheet.getByRole('heading',{name:'Checkout unavailable',exact:true}).waitFor();assert.equal(await sheet.locator('[data-checkout-action="buy"]').count(),0);await screenshot('unavailable-desktop');await closeProduct();
 
   await openProduct('travel-headphones');assert.equal(await checkout.locator('[data-checkout-action="enroll"]').count(),0);assert.equal(await checkout.locator('[data-checkout-action="preview"]').isDisabled(),true);
+  await recommendation.locator('[data-action="add-card"]').waitFor();
+  assert.ok(recommendationRequests.some(request=>request.category==='other'&&request.amountCents===12999&&request.placeName==='Browser Fixture Retailer'),'Opening a listing must request an automatic advisory using its observed amount, retailer, and unknown merchant category.');
   await screenshot('empty-wallet-desktop');const activeCard=await addAndEnroll('active-cash'),otherCard=await addAndEnroll('quicksilver');
   const methods=await api('/agent-checkout/methods',undefined,'GET'),otherMethod=methods.find(method=>method.cardId===otherCard.id);assert.ok(otherMethod);
   await checkout.locator(`[data-checkout-action="remove-method"][data-id="${otherMethod.id}"]`).click();
@@ -95,7 +104,7 @@ try {
   await page.locator('.nav-list a[href="#explore"]').click();await openProduct('travel-headphones');
   // A completed wallet mutation must not reopen the old product after the user
   // closes its form and opens another product while the response is in flight.
-  const currentState=await api('/bootstrap',undefined,'GET'),extraProduct=currentState.cardProducts.find(product=>!currentState.cards.some(card=>card.productId===product.id));assert.ok(extraProduct);
+  const currentState=await api('/bootstrap',undefined,'GET'),extraProduct=currentState.cardProducts.find(product=>product.id==='savor');assert.ok(extraProduct);assert.equal(currentState.cards.some(card=>card.productId==='savor'),false);
   let releaseAdd,addFetched;const addGate=new Promise(resolve=>{releaseAdd=resolve;}),fetched=new Promise(resolve=>{addFetched=resolve;});
   const delayAdd=async route=>{if(route.request().method()!=='POST')return route.continue();const response=await route.fetch();addFetched();await addGate;await route.fulfill({response});};
   await page.route('**/api/v1/finance/cards',delayAdd);
@@ -107,8 +116,16 @@ try {
     assert.match(await checkout.locator('[data-checkout-selected-product]').innerText(),/Explore running shoes/,'A delayed add-card response must not replace the newer selected product.');
   }finally{releaseAdd();await page.unroute('**/api/v1/finance/cards',delayAdd);}
   await closeProduct();await openProduct('travel-headphones');
+  await recommendation.getByText(/Wells Fargo Active Cash/).first().waitFor();
+  const conditionalResponse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/location/recommendations'&&response.request().postDataJSON()?.category==='dining');
+  await sheet.locator('#connected-product-recommendation-form [name="category"]').selectOption('dining');await sheet.locator('#connected-product-recommendation-form [type="submit"]').click();
+  const conditional=await (await conditionalResponse).json(),conditionalBest=conditional.cards.find(card=>card.cardId===conditional.bestCardId);
+  assert.equal(conditionalBest.cardName,'Capital One Savor');assert.equal(conditionalBest.rewardBps,300);assert.equal(conditionalBest.rewardCents,390);
+  await recommendation.getByText(/Capital One Savor/).first().waitFor();const conditionalText=await recommendation.innerText();assert.match(conditionalText,/3(?:\.0+)?%/);assert.match(conditionalText,/\$3\.90/);assert.match(conditionalText,/if.*(?:coded|dining)|conditional/i,'A chosen merchant category must remain an explicitly conditional estimate.');
+  await recommendation.scrollIntoViewIfNeeded();await screenshot('recommendation-conditional-desktop');await page.setViewportSize({width:390,height:844});await recommendation.scrollIntoViewIfNeeded();await assertFit();await screenshot('recommendation-conditional-mobile');await page.setViewportSize({width:1440,height:1000});
   assert.equal(fixture.provider.calls.length,0,'Search, open, wallet setup, and enrollment must not submit a payment.');
-  const previewA=await preview('Explore travel headphones',14799);assert.equal(await checkout.locator('.checkout-card-set li').count(),2);assert.equal(fixture.provider.calls.length,0);
+  const previewA=await preview('Explore travel headphones',14799);assert.equal(await checkout.locator('.checkout-card-set li').count(),1,'The highlighted best card is separate from the other enrolled card.');assert.equal(fixture.provider.calls.length,0);
+  const checkoutBest=checkout.locator('[data-checkout-best-card]');await checkoutBest.waitFor();const bestText=await checkoutBest.innerText();assert.match(bestText,/Wells Fargo Active Cash/);assert.match(bestText,/2(?:\.0+)?%/);assert.match(bestText,/\$2\.96/);assert.doesNotMatch(bestText,/Capital One Savor/,'Checkout compares enrolled methods at their actual base rates, independently from the advisory category.');
   await assertFit();await checkout.locator('.checkout-permission').scrollIntoViewIfNeeded();await screenshot('permission-desktop');
   await page.setViewportSize({width:390,height:844});await assertFit();await checkout.locator('[data-checkout-form="buy"]').scrollIntoViewIfNeeded();await screenshot('permission-mobile');await page.setViewportSize({width:1440,height:1000});
   await checkout.locator('[data-checkout-action="buy"]').click();await checkout.locator('[data-checkout-receipt]').waitFor();
@@ -127,7 +144,7 @@ try {
   const imports=requests.filter(request=>request.path.endsWith('/catalog-products')&&request.method==='POST');assert.ok(imports.length>=4);for(const request of imports)assert.deepEqual(Object.keys(request.body),['checkoutReference']);
   const approvals=requests.filter(request=>request.path.endsWith('/intents')&&request.method==='POST');assert.equal(approvals.length,2);for(const request of approvals)assert.deepEqual(Object.keys(request.body).sort(),['approved','maxAmountCents','previewId']);
   assert.deepEqual(pageErrors,[]);
-  console.log('PASS: registered Explore search; image/title/action product opening; unavailable price; wallet creation/enrollment/removal preserve selected product; unrelated Wallet dialogs preserve checkout; delayed wallet response preserves newer product; exact product/total preview; explicit approval; best-card fixture receipt; reopen without duplicate payment; another pending product blocks checkout with correct identity; desktop and 390px layouts. All provider/catalog/model transports are isolated fixtures.');
+  console.log('PASS: registered Explore search; automatic wallet advice before enrollment; recommendation refresh after wallet creation; conditional Savor dining rewards; enrolled Active Cash checkout highlight and receipt; image/title/action product opening; unavailable price; wallet creation/enrollment/removal preserve selected product; unrelated Wallet dialogs preserve checkout; delayed wallet response preserves newer product; exact product/total preview; explicit approval; reopen without duplicate payment; another pending product blocks checkout with correct identity; desktop and 390px layouts. All provider/catalog/model transports are isolated fixtures.');
 } catch(error) {
   if(browser){mkdirSync('test-results/explore-checkout-browser',{recursive:true});const page=browser.contexts()[0]?.pages()[0];await page?.screenshot({path:'test-results/explore-checkout-browser/failure.png',fullPage:true}).catch(()=>{});}
   throw error;
