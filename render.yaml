@@ -5,7 +5,7 @@ services:
     region: virginia
     plan: 0.5c-512mb
     buildCommand: npm ci && npm run build
-    startCommand: npm run start:connected
+    startCommand: npm run start:integrated
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

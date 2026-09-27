@@ -8,9 +8,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "node src/server.js",
+    "dev": "node scripts/start-integrated.js",
+    "dev:demo": "node src/server.js",
     "dev:connected": "node src/connected-server.js",
-    "start": "node src/server.js",
+    "start": "node scripts/start-integrated.js",
+    "start:integrated": "node scripts/start-integrated.js",
     "start:connected": "node src/connected-server.js",
     "test": "node --test tests/*.test.js",
     "test:browser": "node scripts/browser-smoke.js",

@@ -220,7 +220,7 @@ export function createConnectedApplication(options = {}) {
       if (!res.writableEnded) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ error: { code: error.code || 'SERVER_ERROR', message: status >= 500 && !error.code ? 'Request failed.' : error.message } })); }
     }
   }
-  return { server: createServer(handler), db, migrate: () => db.migrate() };
+  return { server: createServer(handler), handler, db, migrate: () => db.migrate() };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

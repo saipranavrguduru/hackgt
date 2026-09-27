@@ -41,6 +41,7 @@ export function createApplication(options = {}) {
   const nearbyPlaces = createNearbyPlacesService({fetchImpl:options.locationFetch || fetch});
   const portalPort = Number(options.port ?? process.env.PORT ?? 3000);
   const storePort = Number(options.storePort ?? process.env.STORE_PORT ?? 3001);
+  const allowedHost = options.origin ? new URL(options.origin).host : null;
   const scoped = (key,userId) => (store.data[key] || []).filter(row => row.userId === userId);
   const summary = userId => {
     const result = domain.savingsSummary(store.data,userId);
@@ -80,10 +81,10 @@ export function createApplication(options = {}) {
     res.setHeader('X-Content-Type-Options','nosniff'); res.setHeader('Referrer-Policy','no-referrer');
     res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Permissions-Policy','geolocation=(self)');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:3000 http://127.0.0.1:3000; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://cdn.plaid.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://production.plaid.com https://development.plaid.com https://sandbox.plaid.com http://localhost:3000 http://127.0.0.1:3000; frame-src https://cdn.plaid.com https://*.plaid.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const send = (body,status=200) => { if (!res.writableEnded) { store.save(); res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(body)); } };
     try {
-      requireValue(/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || ''),'INVALID_HOST','Use the local application address.',403);
+      requireValue(/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || '') || req.headers.host === allowedHost,'INVALID_HOST','Use the configured application address.',403);
       const url = new URL(req.url,`http://${req.headers.host}`);
       const method = req.method;
       const path = url.pathname.replace(/^\/api\/v1/,'');

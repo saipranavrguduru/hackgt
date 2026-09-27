@@ -1,18 +1,19 @@
 # PerkPilot
 
-> For the separate database-backed Plaid, live-listing, and model-backed path, see [CONNECTED.md](CONNECTED.md). The commands below run the original synthetic demo.
+> The full portal now includes the database-backed Plaid, live-listing, and model-backed workspace under **Connected**. See [CONNECTED.md](CONNECTED.md) for provider details.
 
 Personalized deals from spending patterns, with product research, a shared card/quote engine, explicitly approved simulated checkout, and a ledger of confirmed benefits. Implemented from [PERKPILOT.md](PERKPILOT.md).
 
-The default app is a **local synthetic financial demo**. No bank, issuer account, payment, or reward provider is connected there. No money moves. Public card product reward rules are published metadata, not proof of card ownership or individual offer eligibility. Optional nearby-place search uses live OpenStreetMap data, separately from the synthetic financial records.
+The original shopping, offer, wallet, extension, and checkout journeys remain a **local synthetic financial demo**. No money moves. Public card product reward rules are published metadata, not proof of card ownership or individual offer eligibility. Optional nearby-place search uses live OpenStreetMap data, separately from the synthetic financial records.
 
-The separate [connected app](CONNECTED.md) supports Plaid Sandbox transactions, PostgreSQL storage, Gemini or OpenAI answers, and SerpApi Google Shopping results when their credentials are configured.
+The **Connected** area in the same portal supports Plaid Sandbox transactions, PostgreSQL storage, Gemini or OpenAI answers, and SerpApi Google Shopping results when their credentials are configured. Live records and synthetic demo records stay labeled and use separate storage boundaries.
 
 ## Run
 
-Requires Node.js 20 or newer. No dependencies need installation.
+Requires Node.js 20 or newer.
 
 ```sh
+npm install
 npm run dev
 ```
 
@@ -22,7 +23,7 @@ Keep this process running, then open:
 - Controlled Alo store: http://localhost:3001/store?product=alo-jacket
 - Controlled Nike store: http://localhost:3001/store?product=nike-pegasus
 
-Choose **Explore Alex's sample profile** for the full journey or create a local account. Registered accounts start with no transactions, accounts, or cards and consent disabled. Cards selected in Wallet are self-reported and support comparison only. Passwords must be 12–128 characters.
+Choose **Explore Alex's sample profile** for the labeled demo journey or create an account. New account registration also creates the connected profile when the database is configured, so the same credentials open the Connected area. Registered demo records start empty and connected transaction consent starts disabled. Cards selected in Wallet are self-reported and support comparison only. Passwords must be 12–128 characters.
 
 Sample history uses September 23, 2026 as its demo clock. Session/pairing/checkout expiration also checks actual elapsed time.
 
@@ -82,9 +83,9 @@ npm run demo:reset
 
 This preserves registered profiles and their records. Do not run multiple application processes against the same data directory. JSON files are not a production transaction database.
 
-Environment variables are read from the shell; `.env.example` documents them. The application does **not** automatically load `.env` files. Optional `OPENAI_API_KEY` and `OPENAI_MODEL` enable bounded mission interpretation and non-monetary explanations through the [Responses API](https://developers.openai.com/api/docs/guides/text). Without a key or after provider failure, a labeled deterministic fallback runs. A configured-key model call has not been verified. Raw account/card/session credentials are never passed to the model; it has no purchase tools.
+`.env.example` documents configuration. `npm run dev` and `npm start` load a local gitignored `.env` when present; deployed environments use their secret manager. Gemini powers the Connected assistant when configured. The synthetic demo assistant keeps its bounded deterministic behavior unless its optional model provider is configured. Raw account/card/session credentials are never passed to a model, and neither assistant has purchase tools.
 
-See [CONTRACTS.md](CONTRACTS.md) for API boundaries and [LIVE_INTEGRATION.md](LIVE_INTEGRATION.md) for the unavailable live integrations. The original design's statements about an earlier repository are requirements context; this README and current test output describe this implementation.
+See [CONTRACTS.md](CONTRACTS.md) for API boundaries, [CONNECTED.md](CONNECTED.md) for the implemented provider layer, and [LIVE_INTEGRATION.md](LIVE_INTEGRATION.md) for remaining production integrations. The original design's statements about an earlier repository are requirements context; this README and current test output describe this implementation.
 
 ## Troubleshooting
 
