@@ -11,6 +11,7 @@ import { createShoppingLocationResolver } from './geocoder.js';
 import { createEbayClient } from './ebay.js';
 import { createShopifyClient } from './shopify.js';
 import { fail, requireValue } from './errors.js';
+import { createCheckoutCatalog } from './checkout-catalog.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const assets = { '/': ['live.html', 'text/html'], '/live.js': ['live.js', 'text/javascript'], '/live.css': ['live.css', 'text/css'] };
@@ -42,6 +43,7 @@ export function createConnectedApplication(options = {}) {
   const ebay = options.ebay || createEbayClient(options.ebayOptions);
   const shopify = options.shopify || createShopifyClient(options.shopifyOptions);
   const catalog = serpapi.configured ? serpapi : ebay.configured ? ebay : shopify;
+  const checkoutCatalog = createCheckoutCatalog(options.checkoutCatalogOptions);
   const catalogName = serpapi.configured ? 'serpapi-google-shopping' : ebay.configured ? 'ebay' : shopify.configured ? 'shopify' : 'unconfigured';
   const origin = options.origin || process.env.PUBLIC_ORIGIN || 'http://localhost:3400';
   const canonical = new URL(origin);
@@ -271,7 +273,9 @@ export function createConnectedApplication(options = {}) {
       }
       if (url.pathname === '/api/products' && method === 'GET') {
         requireValue(catalog.configured,'PROVIDER_NOT_CONFIGURED','Current product search is not configured. Search manually at a retailer or try again later.',503);
-        return send(await catalog.search(url.searchParams.get('q') || '', session.shopping_location ? { location:session.shopping_location } : undefined));
+        const result=await catalog.search(url.searchParams.get('q') || '', session.shopping_location ? { location:session.shopping_location } : undefined);
+        const principal=identity?.sessionDigest ? {subjectKey:'portal:'+identity.id,sessionDigest:identity.sessionDigest} : null;
+        return send({...result,products:checkoutCatalog.issue(principal,result.products)});
       }
       if (url.pathname === '/api/assistant' && method === 'POST') {
         requireValue(ai.configured,'AI_NOT_CONFIGURED','The shopping assistant is not configured. You can still search products manually.',503);
@@ -296,7 +300,7 @@ export function createConnectedApplication(options = {}) {
       if (!res.writableEnded) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ error: { code: error.code || 'SERVER_ERROR', message: status >= 500 && !error.code ? 'Request failed.' : error.message } })); }
     }
   }
-  return { server: createServer(handler), handler, db, migrate: () => db.migrate() };
+  return { server: createServer(handler), handler, db, migrate: () => db.migrate(), resolveCatalogReference:checkoutCatalog.resolve };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

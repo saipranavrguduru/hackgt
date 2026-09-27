@@ -12,6 +12,7 @@ import * as research from './research.js';
 import * as catalog from './card-catalog.js';
 import { assistantAnswer, interpretMission } from './ai.js';
 import { createNearbyPlacesService, validateLocationInput } from './places.js';
+import {trackedSavings,recordCardPurchase,removeCardPurchase} from './savings.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const publicRoot = join(root, 'public');
@@ -48,9 +49,12 @@ export function createApplication(options = {}) {
   const storePort = Number(options.storePort ?? process.env.STORE_PORT ?? 3001);
   const allowedHost = options.origin ? new URL(options.origin).host : null;
   const scoped = (key,userId) => (store.data[key] || []).filter(row => row.userId === userId);
-  const summary = userId => {
-    const result = domain.savingsSummary(store.data,userId);
-    return {...result,confirmedCents:result.confirmedCents ?? result.totalCents ?? result.confirmedSavingsCents ?? 0};
+  const summary = async (userId,req) => {
+    let checkoutPurchases=[],checkoutRewardsUnavailable=false;
+    if(!store.data.users.find(user=>user.id===userId)?.sample && checkoutRuntime?.listRewardPurchases){
+      try{checkoutPurchases=await checkoutRuntime.listRewardPurchases(req);}catch{checkoutRewardsUnavailable=true;}
+    }
+    return trackedSavings(store.data,userId,{checkoutPurchases,checkoutRewardsUnavailable});
   };
   const feed = userId => {
     const result = domain.rankOffers(store.data,userId);
@@ -194,6 +198,9 @@ export function createApplication(options = {}) {
         requireValue(allowed,'SCOPE_FORBIDDEN','This connection does not permit that action.',403);
       }
       if(path==='/location/recommendations' && method==='POST') return send(domain.recommendLocationCards(state,userId,body));
+      if(path==='/rewards/card-purchases' && method==='POST') {const result=recordCardPurchase(state,userId,body);return send(result,result.duplicate?200:201);}
+      const trackedPurchase=path.match(/^\/rewards\/card-purchases\/([^/]+)$/);
+      if(trackedPurchase && method==='DELETE')return send(removeCardPurchase(state,userId,decodeURIComponent(trackedPurchase[1])));
       if(path==='/location/nearby' && method==='POST') {
         const location = validateLocationInput(body);
         const cutoff = Date.now() - 60e3;
@@ -216,7 +223,7 @@ export function createApplication(options = {}) {
       }
       if(path==='/bootstrap' && method==='GET') {
         const ranked=feed(userId);
-        return send({user:cleanUser(user),profile:domain.getProfile(state,userId),...ranked,notifications:scoped('notifications',userId),cards:scoped('cards',userId),cardProducts:cardProducts(),accounts:scoped('accounts',userId),transactions:scoped('transactions',userId),products:state.products,merchants:state.merchants,missions:scoped('missions',userId),watches:scoped('watches',userId),purchases:scoped('purchases',userId),savings:summary(userId),mode,now:state.now || state.clock,storeUrl:`http://localhost:${storePort}`,finance:domain.financeSummary(state,userId)});
+        return send({user:cleanUser(user),profile:domain.getProfile(state,userId),...ranked,notifications:scoped('notifications',userId),cards:scoped('cards',userId),cardProducts:cardProducts(),accounts:scoped('accounts',userId),transactions:scoped('transactions',userId),products:state.products,merchants:state.merchants,missions:scoped('missions',userId),watches:scoped('watches',userId),purchases:scoped('purchases',userId),savings:await summary(userId,req),mode,now:state.now || state.clock,storeUrl:`http://localhost:${storePort}`,finance:domain.financeSummary(state,userId)});
       }
       if(path==='/profile' && method==='GET') return send(domain.getProfile(state,userId));
       if(path==='/profile/regenerate' && method==='POST') return send(domain.getProfile(state,userId));
@@ -333,7 +340,7 @@ export function createApplication(options = {}) {
           state.purchases.push(purchase); record.purchaseId=purchase.id; record.status=purchase.status; return send({purchase,session:record});
         }
       }
-      if(path==='/rewards/summary' && method==='GET') return send(summary(userId));
+      if(path==='/rewards/summary' && method==='GET') return send(await summary(userId,req));
       if(path==='/rewards/purchases' && method==='GET') return send(scoped('purchases',userId));
       const purchase=path.match(/^\/rewards\/purchases\/([^/]+)$/);
       if(purchase && method==='GET') return send({...owned(state.purchases,purchase[1],userId),events:scoped('events',userId).filter(e=>e.purchaseId===purchase[1]),ledger:scoped('ledger',userId).filter(e=>e.purchaseId===purchase[1])});

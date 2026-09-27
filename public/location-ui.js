@@ -2,7 +2,7 @@
 
 window.LocationUI = (() => {
   const categories = [['dining','Dining'],['groceries','Groceries'],['gas','Gas'],['drugstores','Drugstores'],['other','Other / unsure']];
-  const state = { generation:0, active:false, userId:null, fields:{category:'other',placeName:'',amount:''}, pending:null, places:[], selectedPlaceId:null, source:null, accuracyMeters:null, status:'', error:false, result:null };
+  const state = { generation:0, active:false, userId:null, fields:{category:'other',placeName:'',amount:''}, pending:null, places:[], selectedPlaceId:null, source:null, accuracyMeters:null, status:'', error:false, result:null, purchase:null };
   const app = () => window.App;
   const esc = value => app().escapeHtml(value);
   const icon = name => app().icon(name);
@@ -15,12 +15,13 @@ window.LocationUI = (() => {
   function reset() {
     state.generation++;
     state.active=false; state.userId=null; state.pending=null; state.places=[]; state.selectedPlaceId=null;
-    state.source=null; state.accuracyMeters=null; state.status=''; state.error=false; state.result=null;
+    state.source=null; state.accuracyMeters=null; state.status=''; state.error=false; state.result=null; state.purchase=null;
     state.fields={category:'other',placeName:'',amount:''};
   }
 
   function current(operation) {
-    return state.active && state.generation===operation.generation && state.userId===operation.userId && app().state.data?.user?.id===operation.userId && document.querySelector('#sheet')?.open && Boolean(document.querySelector('#location-form'));
+    const sheet=document.querySelector('#sheet');
+    return state.active && state.generation===operation.generation && state.userId===operation.userId && app().state.data?.user?.id===operation.userId && sheet?.open && sheet.dataset.owner==='location' && Boolean(document.querySelector('#location-form'));
   }
 
   function readFields() {
@@ -30,7 +31,7 @@ window.LocationUI = (() => {
   }
 
   function begin(pending) {
-    state.generation++; state.pending=pending; state.error=false; state.result=null;
+    state.generation++; state.pending=pending; state.error=false; state.result=null; state.purchase=null;
     return {generation:state.generation,userId:state.userId};
   }
 
@@ -57,13 +58,25 @@ window.LocationUI = (() => {
     return `<article class="location-card-result ${primary?'primary':''}">${primary?'<span class="eyebrow">Best estimated return in your wallet</span>':''}<div class="row between"><div><h3>${esc(card.cardName)}</h3><p class="fine-note">${esc(ownership)}${card.last4?` · •••• ${esc(card.last4)}`:''}</p></div><strong class="location-rate">${rate(card.rewardBps)}</strong></div><p class="location-basis">${categoryBasis?`If coded as ${esc(state.result.categoryLabel || categoryLabel(state.result.category))}`:'Published base purchase rate'}${categoryBasis?` · base ${rate(card.baseRewardBps)}`:''}</p>${hasAmount?`<div class="location-reward"><span>Estimated cash reward</span><strong>${money(card.rewardCents)}</strong>${categoryBasis?`<small>Base-rate fallback: ${money(card.baseRewardCents)}</small>`:''}</div>`:''}${sourceLink(card)}<details class="location-terms"><summary>Terms & limitations</summary><p>${esc(card.limitations || 'Rewards depend on issuer eligibility, merchant coding, and applicable terms.')}</p></details></article>`;
   }
 
+  function canTrack(result=state.result) {
+    return Number.isSafeInteger(result?.amountCents) && result.amountCents>0 && result.amountCents<=100000000 && list(result.cards).some(card=>card.cardId===result.bestCardId);
+  }
+
+  function purchaseMarker(best) {
+    if(!best)return '';
+    if(!canTrack())return '<p class="fine-note">Enter a purchase amount and show your best card to track estimated cashback in Saved.</p>';
+    const purchase=state.purchase,removed=purchase?.saved?.status==='removed';
+    const message=removed?'This purchase was previously removed from Saved.':purchase?.saved?`Added ${money(purchase.saved.rewardCents)} estimated cashback to Saved.`:purchase?.error||'';
+    return `<div class="location-card-result" data-location-purchase><p class="fine-note">Self-reported purchase · Estimated cashback, not issuer-confirmed rewards.</p><p class="location-explanation">Already paid with ${esc(best.cardName)}? Mark this purchase to track its estimated cashback.</p><button class="button full" type="button" data-action="location-track-purchase"${purchase?.pending||purchase?.saved?' disabled':''}>${removed?'Previously removed':purchase?.saved?'Added to Saved':purchase?.pending?'Adding to Saved…':'I bought this'}</button>${message?`<p class="fine-note${purchase?.error?' error-message':''}" data-location-purchase-status role="status" aria-live="polite">${esc(message)}</p>`:''}</div>`;
+  }
+
   function results() {
     const result=state.result;
     if(!result)return '';
     const cards=list(result.cards);const best=cards.find(card=>card.cardId===result.bestCardId);
     const label=result.placeName || result.categoryLabel || categoryLabel(result.category);
     if(!cards.length)return `<section class="location-results" id="location-results">${app().empty('Your wallet needs a card first.','Add a card product you own to compare its rewards here. Self-reported cards stay unverified.',app().button('Add an owned card','location-add-card'),'wallet')}</section>`;
-    return `<section class="location-results" id="location-results" aria-label="Recommended cards"><div class="section-heading"><div><h3>${esc(label)}</h3><p>${Number.isSafeInteger(result.amountCents)?`For a ${money(result.amountCents)} purchase`:'Comparing reward rates · no purchase amount entered'}</p></div><span class="pill neutral">Your wallet only</span></div>${best?cardResult(best,true):''}<p class="location-explanation">${esc(result.explanation)}</p>${cards.filter(c=>c.cardId!==best?.cardId).map(c=>cardResult(c)).join('')}<div class="info-note amber">${icon('info')}<span>${esc(result.disclaimer || 'A place category does not verify its merchant code. Rewards are estimates, not guaranteed issuer postings.')}</span></div></section>`;
+    return `<section class="location-results" id="location-results" aria-label="Recommended cards"><div class="section-heading"><div><h3>${esc(label)}</h3><p>${Number.isSafeInteger(result.amountCents)?`For a ${money(result.amountCents)} purchase`:'Comparing reward rates · no purchase amount entered'}</p></div><span class="pill neutral">Your wallet only</span></div>${best?cardResult(best,true):''}${purchaseMarker(best)}<p class="location-explanation">${esc(result.explanation)}</p>${cards.filter(c=>c.cardId!==best?.cardId).map(c=>cardResult(c)).join('')}<div class="info-note amber">${icon('info')}<span>${esc(result.disclaimer || 'A place category does not verify its merchant code. Rewards are estimates, not guaranteed issuer postings.')}</span></div></section>`;
   }
 
   function nearbyPlaces() {
@@ -74,7 +87,7 @@ window.LocationUI = (() => {
 
   function render() {
     if(!state.active || app().state.data?.user?.id!==state.userId)return;
-    app().showSheet('I’m at…',`<p>Choose the kind of place you’re at. We’ll compare only cards already in your wallet.</p>${results()}<form id="location-form" class="location-form"><label class="field"><span>Place category</span><select name="category" id="location-category" required>${categories.map(([value,label])=>`<option value="${value}" ${state.fields.category===value?'selected':''}>${label}</option>`).join('')}</select></label><div class="grid-two"><label class="field"><span>Place name <span class="muted">(optional)</span></span><input name="placeName" id="location-place-name" maxlength="120" autocomplete="off" placeholder="A restaurant or store" value="${esc(state.fields.placeName)}"></label><label class="field"><span>Purchase amount in USD <span class="muted">(optional)</span></span><input name="amount" id="location-amount" type="number" inputmode="decimal" min="0.01" max="1000000" step="0.01" placeholder="45.00" value="${esc(state.fields.amount)}"></label></div><p class="fine-note location-coding-note">A name or nearby place type does not verify merchant coding. Category rewards apply only if the issuer recognizes that category.</p><button class="button full" type="submit" ${state.pending==='recommendation'?'disabled':''}>${state.pending==='recommendation'?'Comparing your cards…':'Show best card'} ${icon('card')}</button></form><div id="location-status" class="location-status ${state.error?'error-message':''}" role="status" aria-live="polite">${esc(state.status)}</div><section class="location-lookup" aria-label="Optional nearby lookup"><div class="row between"><h3>Or find a nearby place</h3><span class="pill neutral">Optional</span></div><p id="location-privacy" class="fine-note">Selecting Locate me asks for your current location. Your coordinates are sent once through this server to OpenStreetMap for this lookup. PerkPilot keeps no location history.</p><button class="button secondary" type="button" data-action="location-locate" aria-describedby="location-privacy" ${state.pending==='lookup'?'disabled':''}>${icon('pin')} ${state.pending==='lookup'?'Finding nearby places…':'Locate me'}</button></section>${nearbyPlaces()}`,{owner:'location'});
+    app().showSheet('I’m at…',`<p>Choose the kind of place you’re at. We’ll compare only cards already in your wallet.</p>${results()}<form id="location-form" class="location-form"><label class="field"><span>Place category</span><select name="category" id="location-category" required>${categories.map(([value,label])=>`<option value="${value}" ${state.fields.category===value?'selected':''}>${label}</option>`).join('')}</select></label><div class="grid-two"><label class="field"><span>Place name <span class="muted">(optional)</span></span><input name="placeName" id="location-place-name" maxlength="120" autocomplete="off" placeholder="A restaurant or store" value="${esc(state.fields.placeName)}"></label><label class="field"><span>Purchase amount in USD <span class="muted">(optional)</span></span><input name="amount" id="location-amount" type="number" inputmode="decimal" min="0.01" max="1000000" step="0.01" placeholder="45.00" value="${esc(state.fields.amount)}"></label></div><p class="fine-note location-coding-note">A name or nearby place type does not verify merchant coding. Category rewards apply only if the issuer recognizes that category.</p><button class="button full" type="submit" ${state.pending==='recommendation'?'disabled':''}>${state.pending==='recommendation'?'Comparing your cards…':'Show best card'} ${icon('card')}</button></form><div id="location-status" class="location-status ${state.error?'error-message':''}" role="status" aria-live="polite">${esc(state.status)}</div><section class="location-lookup" aria-label="Optional nearby lookup"><div class="row between"><h3>Or find a nearby place</h3><span class="pill neutral">Optional</span></div><p id="location-privacy" class="fine-note">Selecting Locate me asks for your current location. Your coordinates are sent once through this server to OpenStreetMap for this lookup. Coordinates aren’t saved. Recording a purchase saves the place name you confirm.</p><button class="button secondary" type="button" data-action="location-locate" aria-describedby="location-privacy" ${state.pending==='lookup'?'disabled':''}>${icon('pin')} ${state.pending==='lookup'?'Finding nearby places…':'Locate me'}</button></section>${nearbyPlaces()}`,{owner:'location'});
   }
 
   function fail(operation,message) {
@@ -115,14 +128,14 @@ window.LocationUI = (() => {
       if(entered){if(!/^(?:\d+|\d*\.\d{1,2})$/.test(entered))throw new Error('Enter a USD amount with up to two decimal places.');const [whole,fraction='']=entered.split('.');const cents=Number(whole)*100+Number(fraction.padEnd(2,'0'));if(!Number.isSafeInteger(cents)||cents<1||cents>100000000)throw new Error('Enter an amount from $0.01 to $1,000,000.00.');payload.amountCents=cents;}
       const response=await app().api('/location/recommendations','POST',payload);
       if(!current(operation))return;
-      state.result=response;state.pending=null;state.status=list(response.cards).length?'Your card comparison is ready. Merchant coding and issuer terms still apply.':'Add a card you own to get a recommendation.';render();
+      state.result=response;state.purchase=canTrack(response)?{requestId:crypto.randomUUID(),pending:false,saved:null,error:''}:null;state.pending=null;state.status=list(response.cards).length?'Your card comparison is ready. Merchant coding and issuer terms still apply.':'Add a card you own to get a recommendation.';render();
       document.querySelector('#sheet').scrollTop=0;
     } catch(error){fail(operation,error.message || 'The recommendation could not be loaded. Please try again.');}
   }
 
   function change(event) {
     if(!state.active || !event.target.closest('#location-form'))return;
-    readFields();state.generation++;state.pending=null;state.result=null;state.error=false;
+    readFields();state.generation++;state.pending=null;state.result=null;state.purchase=null;state.error=false;
     state.status='Details changed. Choose Show best card to compare this purchase.';
     document.querySelector('#location-results')?.remove();
     const status=document.querySelector('#location-status');if(status){status.textContent=state.status;status.classList.remove('error-message');}
@@ -130,13 +143,35 @@ window.LocationUI = (() => {
     const locateButton=document.querySelector('[data-action="location-locate"]');if(locateButton){locateButton.disabled=false;locateButton.innerHTML=`${icon('pin')} Locate me`;}
   }
 
+  async function trackPurchase() {
+    const operation={generation:state.generation,userId:state.userId},purchase=state.purchase,result=state.result;
+    if(!current(operation)||!canTrack(result)||!purchase||purchase.pending||purchase.saved)return;
+    purchase.pending=true;purchase.error='';state.error=false;render();
+    let response;
+    try {
+      response=await app().api('/rewards/card-purchases','POST',{requestId:purchase.requestId,cardId:result.bestCardId,category:result.category,placeName:result.placeName||'',amountCents:result.amountCents});
+      if(!response?.purchase?.id||!Number.isSafeInteger(response.purchase.rewardCents)||response.purchase.rewardCents<0)throw new Error('The saved purchase could not be verified. Try again.');
+    } catch(error) {
+      if(!current(operation)||state.purchase!==purchase)return;
+      purchase.pending=false;purchase.error=error.message||'The purchase could not be added. Try again.';render();return;
+    }
+    if(!current(operation)||state.purchase!==purchase)return;
+    purchase.pending=false;purchase.saved=response.purchase;render();
+    try {await app().refresh();}
+    catch {
+      if(!current(operation)||state.purchase!==purchase)return;
+      state.status=purchase.saved.status==='removed'?'This purchase was previously removed. Refresh Saved to update the displayed total.':'Your purchase was saved. Refresh Saved to update the displayed total.';state.error=false;render();
+    }
+  }
+
   async function action(name,target) {
     if(name==='location-open'){open();return;}
     if(!state.active)return;
+    if(name==='location-track-purchase'){await trackPurchase();return;}
     if(name==='location-locate'){locate();return;}
     if(name==='location-select-place'){
       readFields();const place=state.places[Number(target.dataset.index)];if(!place)return;
-      state.generation++;state.pending=null;state.result=null;state.error=false;state.selectedPlaceId=place.id;
+      state.generation++;state.pending=null;state.result=null;state.purchase=null;state.error=false;state.selectedPlaceId=place.id;
       state.fields.category=place.category;state.fields.placeName=place.name.slice(0,120);
       state.status=`Selected ${place.name}. Confirm the place category, then choose Show best card.`;render();document.querySelector('#location-category')?.focus();return;
     }

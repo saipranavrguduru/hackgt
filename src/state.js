@@ -5,7 +5,7 @@ export class StateStore {
   constructor(path = null) {
     this.path = path;
     this.data = readJson(path, () => createFixtures());
-    for (const key of ['pairings', 'storeCarts', 'checkoutSessions', 'purchases', 'ledger', 'events']) this.data[key] ||= [];
+    for (const key of ['pairings', 'storeCarts', 'checkoutSessions', 'purchases', 'ledger', 'events', 'cardRewardPurchases']) this.data[key] ||= [];
   }
   save() { writeJson(this.path, this.data); }
   resetSamples() {

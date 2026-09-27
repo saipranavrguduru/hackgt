@@ -11,7 +11,7 @@ export async function startCheckoutApplication(options={}) {
  const close=async()=>{await checkout?.close();await Promise.all([closeServer(app.server),closeServer(app.merchant)]);await app.close();};
  try {
   await app.migrate();
-  checkout=await createCheckoutRuntime({auth:app.demo.auth,store:app.demo.store,...options.checkoutOptions,config:{origin:localOrigin,...options.checkoutOptions?.config}});
+  checkout=await createCheckoutRuntime({auth:app.demo.auth,store:app.demo.store,...options.checkoutOptions,config:{origin:localOrigin,resolveCatalogReference:app.connected.resolveCatalogReference,...options.checkoutOptions?.config}});
   if(checkout.capabilities().enabled)app.demo.setCheckoutRuntime(checkout);
   await checkout.start();
   await new Promise((resolveListen,reject)=>{app.server.once('error',reject);app.server.listen(app.port,'127.0.0.1',resolveListen);});

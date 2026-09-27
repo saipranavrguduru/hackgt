@@ -21,7 +21,7 @@ export function createIntegratedApplication(options = {}) {
     if (session?.kind !== 'portal') return null;
     const user = demo.store.data.users.find(value=>value.id === session.userId);
     if (!user || user.sample) return null;
-    return { id:user.id, name:user.name, email:user.email };
+    return { id:user.id, name:user.name, email:user.email, sessionDigest:session.digest };
   };
   const connected = createConnectedApplication({ ...(options.connectedOptions || {}), origin, portalIdentity });
   const handler = (req, res) => {

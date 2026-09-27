@@ -96,8 +96,8 @@ small, .small, .fine-note, .muted { color: var(--neutral-9); font-size: var(--ty
 .pill::before { display: none; }
 .pill.neutral { background: var(--neutral-3); color: var(--neutral-9); }
 .pill.amber { background: var(--warning-tint); color: var(--warning); }
-.button, .primary, .checkout-button { min-height: var(--control-height); background: var(--accent); color: var(--neutral-0); border: 1px solid var(--accent); border-radius: var(--radius-sm); box-shadow: none; font-size: var(--type-sm); font-weight: 600; }
-.button:hover, .primary:hover, .checkout-button:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: none; transform: none; }
+.button, button.primary, .checkout-button { min-height: var(--control-height); background: var(--accent); color: var(--neutral-0); border: 1px solid var(--accent); border-radius: var(--radius-sm); box-shadow: none; font-size: var(--type-sm); font-weight: 600; }
+.button:hover, button.primary:hover, .checkout-button:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: none; transform: none; }
 .button.secondary, .secondary, .button.white, .button.ghost, .quiet { background: var(--neutral-0); color: var(--neutral-10); border: 1px solid var(--neutral-6); }
 .button.secondary:hover, .secondary:hover, .button.white:hover, .button.ghost:hover, .quiet:hover { background: var(--neutral-3); border-color: var(--neutral-7); }
 .button.danger, .danger { background: var(--danger-tint); color: var(--danger); border: 1px solid var(--danger-tint); }

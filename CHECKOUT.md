@@ -4,7 +4,29 @@ Buy with PerkPilot authorizes one controlled-store purchase with a maximum total
 
 The controlled merchant is **PerkPilot Test Store**, not Nike, Alo, Amazon, or another external retailer. Stripe test transactions do not move money. The receipt's reward amount estimates a published base rate; it is not a posted benefit. Existing synthetic checkout remains separately labeled.
 
-Implementation and code review are complete. Sandbox integration acceptance is **pending**: successful unit/browser fixtures do not prove a real Stripe payment, real Gemini tool run, signed webhook delivery, interactive authentication, or PostgreSQL concurrency. See the [implementation plan](docs/superpowers/plans/2026-09-26-buy-with-perkpilot.md) and [approved specification](docs/superpowers/specs/2026-09-26-agent-checkout-design.md).
+A local run verified the core happy path with real Gemini tool calls, a Stripe-confirmed $104 sandbox payment using API test payment methods, and its signed webhook. Full sandbox acceptance remains **pending**, including manual browser enrollment/authentication and real PostgreSQL concurrency. The Explore regression uses isolated provider/model fixtures; those fixtures alone do not establish real provider behavior. See the [implementation plan](docs/superpowers/plans/2026-09-26-buy-with-perkpilot.md) and [approved specification](docs/superpowers/specs/2026-09-26-agent-checkout-design.md).
+
+## Buy from Explore
+
+Sign in with a registered portal account and search **Explore**. Open a product image, title, or **Buy with PerkPilot** button to see its product sheet. Eligible USD listings support the same saved-card enrollment, permission review, bounded agent purchase, and receipt as Test Store, without leaving Explore. Adding a wallet card returns you to the selected product.
+
+The product sheet automatically shows **Best card in your Wallet**, using the same owned-card comparison as **I’m at…**. It includes the published rate, estimated cashback on the observed USD merchandise price, alternatives, and issuer terms. Listings do not verify merchant categories, so the default uses base rates. Choose a merchant category and update the comparison to see supported conditional bonuses. Missing or non-USD prices show rates without a dollar estimate.
+
+The purchase review separately highlights **Best enrolled card for this test purchase**, using the server-ranked saved methods and final sandbox total. A wallet card recommendation does not enroll a payment method or change the sandbox merchant category; the agent still chooses the best authorized enrolled card at its base rate. Wallet refreshes update the advisory without replacing an active checkout.
+
+Explore checkout creates a **PerkPilot Test Store sandbox copy** of the observed listing. Its merchandise price comes from the server's catalog result, with **10% test tax and $5 test shipping**. These are sandbox fees, not the external retailer's charges; no external retailer order or delivery is created. The existing **$500 maximum total** still applies. Unsupported, missing-price, or over-limit listings show a reason and retain their retailer link.
+
+Product references expire after 15 minutes and are tied to the registered portal session. Refresh the search after expiry or a server restart. Once imported, the selected SKU and price snapshot remain stable for purchase approval and recovery. Closing the sheet does not cancel an approved purchase; reopening its product or Test Store recovers its status. An unresolved purchase prevents starting a different one.
+
+The isolated regression command is `npm run test:explore:browser`. Its catalog, Gemini transport, Stripe fields, and payment provider are test doubles; it verifies the integrated UI/server flow without spending external API quota. See the [Explore integration plan](docs/superpowers/plans/2026-09-27-explore-checkout.md).
+
+## Cashback in Saved
+
+**Saved this year** now includes confirmed ledger benefits plus clearly labeled **estimated cashback**. Completed Explore/Test Store orders contribute their persisted cashback estimate automatically; processing, failed, cancelled, and unconfirmed orders contribute nothing. Opening a receipt or replaying a webhook does not add another entry. Existing completed orders appear after refresh, without a data migration or new provider request.
+
+For **I’m at… / Which card is best?**, enter an amount, compare cards, then choose **I bought this** to record a self-reported purchase using the recommended card. Comparing cards alone adds nothing. The server calculates the estimate from its card rules and deduplicates retries. **Remove tracking** in Saved removes an accidental report; it does not refund a payment. Registered history uses the current year in the user's timezone; sample profiles retain their demo clock.
+
+Saved separates confirmed benefits from estimates and shows each purchase, card, amount, and cashback. These estimates are not issuer-posted rewards or real money earned from sandbox payments. The existing sample reward lifecycle still moves an estimate to confirmed benefits without counting it twice, and refunds reverse that sample benefit. A checkout-history outage is shown explicitly instead of claiming the partial total is complete.
 
 ## Configure an authorized test workspace
 
@@ -41,6 +63,8 @@ Migration creates only prefixed checkout tables, now schema **v2**. Runtime does
 If the sibling storefront port 3001 is already in use, set `STORE_PORT=3002` (or another free port) in `.env`. The current local session uses 3002.
 
 Ordinary `npm run dev` and the labeled synthetic profile journey remain available with checkout disabled. Stripe is required only when checkout is explicitly enabled.
+
+If the Test Store says **Test checkout needs setup**, open **How to enable test checkout** for the required configuration and startup commands. **Add a wallet card** works before provider setup. After restarting with `npm run dev:checkout`, reload the page or click **Check setup again**. Product or saved-method loading errors are displayed with a retry action; enrollment and purchase forms appear once their prerequisites are available.
 
 ## Forward signed local webhooks
 
@@ -101,6 +125,7 @@ npm test
 npm run build
 node --env-file=.env --test tests/checkout-postgres.test.js
 npm run test:checkout:browser
+npm run test:checkout:setup-browser
 npm run test:integrated:browser
 npm run test:browser
 node --env-file=.env scripts/verify-checkout.js
@@ -116,9 +141,10 @@ Visa Intelligent Commerce and Stripe Shared Payment Tokens are not implemented i
 
 ## Local verification recorded for this change
 
-- `npm test`: 201 passed, zero failures, one explicit skip for missing `TEST_CHECKOUT_DATABASE_URL` (202 total).
-- `npm run build`: 80 JavaScript files passed the repository syntax/static check; this is not TypeScript compilation.
+- `npm test`: 205 passed, zero failures, one explicit skip for missing `TEST_CHECKOUT_DATABASE_URL` (206 total).
+- `npm run build`: 81 JavaScript files passed the repository syntax/static check; this is not TypeScript compilation.
 - Existing synthetic browser journey, registered Explore/Connected journey, and agent checkout browser journey passed with isolated provider fixtures; desktop/mobile screenshots were inspected.
+- Unconfigured Test Store browser coverage passes actual setup, retry, and wallet-onboarding clicks against the ordinary integrated server, plus ready-empty-wallet and failed-catalog recovery fixtures. No payment provider is called by this check.
 - Independent review regressions cover mixed extension/portal credentials, failed-payment normalization, exact-approval recovery, and linked-profile deletion without data resurrection.
 - A separate actual Gemini request using the local configuration returned `AGENT_UNAVAILABLE`; live model execution remains unverified.
 - Stripe keys were deferred by the user. No actual Stripe charge, enrollment, challenge, or webhook delivery was claimed. The verifier records incomplete configuration in its redacted report.

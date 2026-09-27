@@ -48,7 +48,7 @@ export function recommendLocationCards(state, userId, input = {}) {
   return {
     category, categoryLabel: LOCATION_CATEGORIES[category], placeName: (input.placeName || '').replace(/[\u0000-\u001f\u007f]/g, '').trim(), amountCents,
     cards, bestCardId: best?.cardId || null, explanation, unsupportedCardCount: ownedCards.length - cards.length,
-    disclaimer: 'Place types do not verify issuer merchant codes. Category bonuses depend on how the merchant processes your purchase; otherwise the base rate applies. Estimates exclude rotating categories, activation offers, promotional bonuses, fees and interest. Issuer eligibility and rounding may differ.'
+    disclaimer: 'Place types do not verify issuer merchant codes or all reward eligibility. Supported category bonuses depend on how the merchant processes your purchase; otherwise the comparison base rate applies. Estimates exclude unverified spending caps, activation, country restrictions, payment-channel and account-tier bonuses, promotional offers, fees and interest. Issuer eligibility and rounding may differ.'
   };
 }
 

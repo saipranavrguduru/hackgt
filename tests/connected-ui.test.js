@@ -3,16 +3,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-function fixture({configured=true,failSearch=false}={}) {
+function fixture({configured=true,failSearch=false,productOverride={},failImport=false,failRecommendation=false,recommendationOverride={}}={}) {
   const requests=[];
   const state={page:'connected',data:{user:{id:'portal-one',name:'Portal Person',sample:false},watches:[]}};
   const user={id:'live-one',name:'Portal Person',email:'person@example.test',consent:false};
   const dashboard={user,connections:[],accounts:[],transactions:[],profile:null,aiConfigured:configured,catalogConfigured:configured};
   dashboard.accounts.push({name:'Travel account',type:'asset',balanceCents:123456,currency:'CAD',last4:'1234'});
-  const product={id:'real-1',name:'Current headphones',merchantName:'Retailer',priceCents:9900,source:'Live catalog',url:'https://example.test/headphones',observedAt:'2026-09-26T12:00:00Z',priceNote:'Tax and shipping unknown'};
+  const product={id:'real-1',name:'Current headphones',merchantName:'Retailer',priceCents:9900,currency:'USD',source:'Live catalog',url:'https://example.test/headphones',observedAt:'2026-09-26T12:00:00Z',priceNote:'Tax and shipping unknown',checkoutReference:'listing-reference',...productOverride};
   const main={innerHTML:''};
+  const root={innerHTML:'',isConnected:true},recommendationRoot={innerHTML:'',isConnected:true},sheet={innerHTML:'',open:false,dataset:{}};
+  const mounts=[];
   const App={state,escapeHtml:v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),money:v=>`$${v/100}`,icon:()=>'',pageHeading:(title,subtitle)=>`<h1>${title}</h1><p>${subtitle}</p>`,toast:()=>{},renderShell:()=>{},closeSheet:()=>{},dataArray:v=>Array.isArray(v)?v:[]};
-  const context={window:{App},document:{querySelector:()=>main},location:{search:'',hash:'#connected'},queueMicrotask,URLSearchParams,URL,console,
+  App.showSheet=(title,body,options={})=>{sheet.innerHTML=App.escapeHtml(title)+body;sheet.open=true;sheet.dataset.owner=options.owner||'';root.innerHTML='';};
+  App.closeSheet=()=>{sheet.open=false;};
+  App.api=async(path,method,body)=>{requests.push({path:'/api/v1'+path,method,body});if(path==='/location/recommendations'){if(failRecommendation)throw new Error('Rewards service unavailable.');return {category:body.category,categoryLabel:body.category==='dining'?'Dining':'Other / unsure',amountCents:body.amountCents??null,bestCardId:'wallet-best',cards:[{cardId:'wallet-best',cardName:'Wells Fargo Active Cash',rewardBps:200,baseRewardBps:200,basis:'base',rewardCents:body.amountCents==null?null:198,sourceUrl:'https://issuer.example.test/rewards',limitations:'Issuer terms apply.'}],explanation:'Highest supported reward rate in your Wallet.',...recommendationOverride};}if(failImport)throw Object.assign(new Error('This listing expired. Search again.'),{code:'CATALOG_REFERENCE_EXPIRED'});return{product:{sku:'explore-item-one',variantId:'sandbox',name:product.name,merchandiseCents:9900,taxCents:990,shippingCents:500},destinations:[]};};
+  const context={window:{App,CheckoutUI:{mount:options=>{mounts.push(options);return{};},dispose:()=>{}}},document:{querySelector:selector=>selector==='#sheet'?sheet:selector==='[data-explore-checkout]'?root:selector==='[data-explore-recommendation]'?recommendationRoot:main},location:{search:'',hash:'#connected'},queueMicrotask,URLSearchParams,URL,console,
     fetch:async(path,init)=>{
       requests.push({path,body:init.body?JSON.parse(init.body):undefined});
       const failed=failSearch&&path.startsWith('/api/products');
@@ -21,8 +26,147 @@ function fixture({configured=true,failSearch=false}={}) {
     }};
   vm.createContext(context);
   vm.runInContext(readFileSync(new URL('../public/connected-ui.js',import.meta.url),'utf8'),context);
-  return {ui:context.window.ConnectedUI,state,requests,main,context};
+  return {ui:context.window.ConnectedUI,state,requests,main,context,sheet,root,recommendationRoot,mounts};
 }
+
+test('opening an Explore product automatically compares owned cards using the existing rewards endpoint',async()=>{
+  const {ui,state,requests,recommendationRoot,mounts}=fixture();
+  await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+  const request=requests.find(r=>r.path==='/api/v1/location/recommendations');
+  assert.deepEqual(JSON.parse(JSON.stringify(request?.body)),{category:'other',placeName:'Retailer',amountCents:9900});
+  assert.match(recommendationRoot.innerHTML,/Best card in your Wallet/);
+  assert.match(recommendationRoot.innerHTML,/Wells Fargo Active Cash/);
+  assert.match(recommendationRoot.innerHTML,/2%/);assert.match(recommendationRoot.innerHTML,/\$1\.98/);
+  assert.match(recommendationRoot.innerHTML,/merchandise/i);assert.match(recommendationRoot.innerHTML,/tax and shipping/i);
+  assert.match(recommendationRoot.innerHTML,/issuer\.example\.test\/rewards/);
+  assert.equal(mounts.length,1);
+});
+
+test('an explicit category updates the recommendation without replacing checkout',async()=>{
+  const {ui,state,requests,recommendationRoot,mounts}=fixture({recommendationOverride:{cards:[{cardId:'wallet-best',cardName:'Dining card',rewardBps:300,baseRewardBps:100,basis:'category',rewardCents:297,baseRewardCents:99}]}});
+  await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+  await ui.submit({id:'connected-product-recommendation-form'},{category:'dining'});
+  assert.equal(requests.filter(r=>r.path==='/api/v1/location/recommendations').at(-1).body.category,'dining');
+  assert.match(recommendationRoot.innerHTML,/If.*Dining/);assert.match(recommendationRoot.innerHTML,/Base.*1%/);
+  assert.equal(mounts.length,1,'changing advisory category must preserve selected checkout');
+});
+
+test('non-USD and missing prices request rates without inventing dollar rewards',async()=>{
+  for(const productOverride of [{currency:'CAD',checkoutReference:null},{priceCents:null,checkoutReference:null}]){
+    const {ui,state,requests,recommendationRoot}=fixture({productOverride});
+    await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+    const request=requests.find(r=>r.path==='/api/v1/location/recommendations');
+    assert.ok(request);assert.equal(Object.hasOwn(request.body,'amountCents'),false);
+    assert.match(recommendationRoot.innerHTML,/2%/);assert.doesNotMatch(recommendationRoot.innerHTML,/\$1\.98/);
+  }
+});
+
+test('recommendation failure leaves checkout usable and offers a retry',async()=>{
+  const {ui,state,recommendationRoot,mounts}=fixture({failRecommendation:true});
+  await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+  assert.equal(mounts.length,1);assert.match(recommendationRoot.innerHTML,/Rewards service unavailable/);
+  assert.match(recommendationRoot.innerHTML,/connected-product-recommendation-retry/);
+});
+
+test('empty wallets offer adding a card inside the Explore flow',async()=>{
+  const {ui,state,recommendationRoot}=fixture({recommendationOverride:{cards:[],bestCardId:null}});
+  await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+  assert.match(recommendationRoot.innerHTML,/Add a wallet card/);assert.match(recommendationRoot.innerHTML,/data-action="add-card"/);
+  assert.doesNotMatch(recommendationRoot.innerHTML,/Wells Fargo Active Cash/);
+});
+
+test('late recommendations cannot overwrite a closed or changed-identity product',async()=>{
+  for(const changeIdentity of [false,true]){
+    const {ui,state,context,sheet,recommendationRoot}=fixture();
+    await ui.refresh();state.page='explore';await ui.search('headphones');
+    const original=context.window.App.api;let release;const held=new Promise(resolve=>{release=resolve;});
+    context.window.App.api=async(...args)=>{if(args[0]==='/location/recommendations')await held;return original(...args);};
+    const pending=ui.openProduct('real-1');
+    if(changeIdentity){state.data.user={id:'someone-else',sample:false};ui.reset();}else{sheet.open=false;ui.closeProduct();}
+    release();await pending;assert.doesNotMatch(recommendationRoot.innerHTML,/Wells Fargo Active Cash/);
+  }
+});
+
+test('newer categories and wallet refresh win over earlier recommendation responses without remounting checkout',async()=>{
+  const {ui,state,context,recommendationRoot,mounts}=fixture();
+  await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+  const original=context.window.App.api;let release;const held=new Promise(resolve=>{release=resolve;});
+  context.window.App.api=async(...args)=>{const result=await original(...args);if(args[0]==='/location/recommendations'&&args[2].category==='dining'){await held;return{...result,explanation:'Outdated dining result'};}return{...result,explanation:'Current wallet result'};};
+  const old=ui.submit({id:'connected-product-recommendation-form'},{category:'dining'});
+  await ui.submit({id:'connected-product-recommendation-form'},{category:'other'});
+  await ui.refreshProductRecommendation();release();await old;
+  assert.match(recommendationRoot.innerHTML,/Current wallet result/);assert.doesNotMatch(recommendationRoot.innerHTML,/Outdated dining result/);
+  assert.equal(mounts.length,1);
+});
+
+test('recommendation content escapes text and rejects unsafe issuer links',async()=>{
+  const {ui,state,recommendationRoot}=fixture({recommendationOverride:{explanation:'<img src=x onerror=alert(1)>',cards:[{cardId:'wallet-best',cardName:'<script>bad</script>',rewardBps:200,basis:'base',rewardCents:0,sourceUrl:'javascript:alert(1)'}]}});
+  await ui.refresh();state.page='explore';await ui.search('headphones');await ui.openProduct('real-1');
+  assert.match(recommendationRoot.innerHTML,/&lt;script&gt;/);assert.match(recommendationRoot.innerHTML,/&lt;img/);
+  assert.doesNotMatch(recommendationRoot.innerHTML,/<script>|<img|javascript:/);assert.match(recommendationRoot.innerHTML,/\$0/);
+});
+
+test('Explore product clicks open checkout for the server-imported selected listing',async()=>{
+  const {ui,state,requests,sheet,mounts}=fixture();
+  await ui.refresh();state.page='explore';await ui.search('headphones');
+  assert.match(ui.renderExplore(),/data-action="connected-product"/);
+  await ui.action('connected-product',{dataset:{id:'real-1'}});
+  assert.equal(sheet.open,true);assert.equal(sheet.dataset.owner,'explore-checkout');
+  assert.match(sheet.innerHTML,/Current headphones/);assert.match(sheet.innerHTML,/Sandbox checkout/);
+  assert.match(sheet.innerHTML,/Retailer/);
+  const request=requests.find(r=>r.path==='/api/v1/agent-checkout/catalog-products');
+  assert.equal(JSON.stringify(request.body),JSON.stringify({checkoutReference:'listing-reference'}),'browser sends only the server reference, never price or merchant');
+  assert.equal(mounts.length,1);assert.equal(mounts[0].selection.sku,'explore-item-one');assert.equal(mounts[0].selection.variantId,'sandbox');
+  assert.equal(state.page,'explore');
+});
+
+test('Explore imports surface expiration and never mount a replacement checkout item',async()=>{
+  const {ui,state,root,mounts}=fixture({failImport:true});
+  await ui.refresh();state.page='explore';await ui.search('headphones');
+  await ui.action('connected-product',{dataset:{id:'real-1'}});
+  assert.match(root.innerHTML,/listing expired/);assert.match(root.innerHTML,/Refresh search/);
+  assert.equal(mounts.length,0);
+});
+
+test('ineligible Explore listings show details without submitting a checkout import',async()=>{
+  const {ui,state,requests,sheet,mounts}=fixture({productOverride:{checkoutReference:null,checkoutUnavailableReason:'This listing exceeds the $500 sandbox limit.'}});
+  await ui.refresh();state.page='explore';await ui.search('headphones');
+  await ui.action('connected-product',{dataset:{id:'real-1'}});
+  assert.match(sheet.innerHTML,/\$500 sandbox limit/);assert.match(sheet.innerHTML,/https:\/\/example.test\/headphones/);
+  assert.equal(mounts.length,0);assert.equal(requests.some(r=>r.path.includes('catalog-products')),false);
+});
+
+test('product details retain listing currency and escape untrusted catalog content',async()=>{
+  const {ui,state,sheet}=fixture({productOverride:{currency:'CAD',name:'<script>merchant</script>',url:'javascript:alert(1)',imageUrl:'https://name:password@example.test/image',checkoutReference:null}});
+  await ui.refresh();state.page='explore';await ui.search('headphones');
+  await ui.action('connected-product',{dataset:{id:'real-1'}});
+  assert.match(sheet.innerHTML,/CA\$99\.00/);
+  assert.match(ui.renderExplore(),/&lt;script&gt;merchant&lt;\/script&gt;/);
+  assert.doesNotMatch(sheet.innerHTML,/javascript:|name:password|<script>/);
+});
+
+test('closing an Explore product or changing identity ignores its delayed checkout import',async()=>{
+  for(const changeIdentity of [false,true]){
+    const {ui,state,context,sheet,mounts}=fixture();
+    await ui.refresh();state.page='explore';await ui.search('headphones');
+    const original=context.window.App.api;let release;
+    const held=new Promise(resolve=>{release=resolve;});
+    context.window.App.api=async(...args)=>{await held;return original(...args);};
+    const pending=ui.action('connected-product',{dataset:{id:'real-1'}});
+    if(changeIdentity){state.data.user={id:'other',sample:false};ui.reset();}else{sheet.open=false;ui.closeProduct();}
+    release();await pending;assert.equal(mounts.length,0);
+  }
+});
+
+test('closing an Explore sheet disposes only its own checkout controller',async()=>{
+  const {ui,state,context}=fixture();let ownDisposals=0,globalDisposals=0;
+  context.window.CheckoutUI.mount=()=>({dispose:()=>{ownDisposals++;}});
+  context.window.CheckoutUI.dispose=()=>{globalDisposals++;};
+  await ui.refresh();state.page='explore';await ui.search('headphones');
+  await ui.action('connected-product',{dataset:{id:'real-1'}});
+  ui.closeProduct();ui.closeProduct();
+  assert.equal(ownDisposals,1);assert.equal(globalDisposals,0,'later Wallet checkout must never be disposed by stale Explore ownership');
+});
 
 test('Connected renders bank management and Explore renders the live shopping workspace',async()=>{
   const {ui,state}=fixture();

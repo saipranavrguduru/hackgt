@@ -9,7 +9,7 @@ const messages={AMOUNT_LIMIT_EXCEEDED:'The merchant total exceeds the amount you
 const methodView=row=>({id:row.id,cardId:row.card_id,productId:row.product_id,brand:row.data.brand,last4:row.data.last4,active:row.active,sourceLabel:'Test card · reward product selected by you'});
 const permissionCard=row=>({...methodView(row),subjectKey:row.subject_key,providerAccountId:row.provider_account_id,revokedAt:row.revoked_at});
 
-export function createCheckoutService({repository,merchant,provider,authAdapter,now=Date.now}) {
+export function createCheckoutService({repository,merchant,provider,authAdapter,now=Date.now,resolveCatalogReference}) {
   const locks=new Map();
   const query=(sql,params=[])=>repository.query(sql,params);
   const accountId=provider.accountId;
@@ -93,6 +93,14 @@ export function createCheckoutService({repository,merchant,provider,authAdapter,
   }
   async function listMethods(principal) {await assertPrincipal(principal);return (await activeMethods(principal)).map(methodView);}
   async function listProducts(principal) {await assertPrincipal(principal);return merchant.listProducts(principal);}
+  async function importCatalogProduct(principal,{checkoutReference}) {
+    await assertPrincipal(principal);
+    requireValue(typeof resolveCatalogReference==='function','CATALOG_CHECKOUT_UNAVAILABLE','Explore checkout is unavailable. Search again after restarting the checkout server.',503);
+    return serial(principal.subjectKey,async()=>{
+      const listing=await resolveCatalogReference(principal,checkoutReference);
+      return merchant.importCatalogProduct(principal,{checkoutReference,listing});
+    });
+  }
   async function rateLimit(principal,table) {
     const rows=(await query(`SELECT id FROM ${table} WHERE subject_key=$1 AND created_at>$2`,[principal.subjectKey,now()-60000])).rows;
     requireValue(rows.length<3,'RATE_LIMITED','Wait a minute before preparing another purchase.',429);
@@ -133,13 +141,31 @@ export function createCheckoutService({repository,merchant,provider,authAdapter,
     const rows=(await query('SELECT id FROM pp_checkout_intents WHERE subject_key=$1 ORDER BY created_at DESC LIMIT 20',[principal.subjectKey])).rows;
     return Promise.all(rows.map(row=>getStatus(principal,row.id)));
   }
+  async function listRewardPurchases(principal) {
+    await assertPrincipal(principal);
+    const rows=(await query(`SELECT o.id,o.intent_id,o.amount_cents,o.confirmed_at,o.data,i.data AS intent_data
+      FROM pp_checkout_orders o JOIN pp_checkout_intents i ON i.id=o.intent_id AND i.subject_key=o.subject_key
+      WHERE o.subject_key=$1 AND o.state='confirmed' AND o.confirmed_at IS NOT NULL AND o.currency='USD'
+      ORDER BY o.confirmed_at DESC,o.id`,[principal.subjectKey])).rows;
+    // Read persisted purchase evidence rather than recalculating against today's
+    // Wallet/catalog. One row per order also deduplicates webhook and page retries.
+    return rows.map(row=>{
+      const cart=row.intent_data?.permission?.cart || {},card=row.data?.card || {};
+      return {id:row.id,orderId:row.id,intentId:row.intent_id,
+        name:typeof cart.name==='string'?cart.name:'Test purchase',merchantName:'PerkPilot Test Store',sourceMerchantName:typeof cart.sourceMerchantName==='string'?cart.sourceMerchantName:null,
+        amountCents:row.amount_cents,currency:'USD',estimatedRewardCents:Number.isSafeInteger(card.estimatedRewardCents)&&card.estimatedRewardCents>=0?card.estimatedRewardCents:0,
+        confirmedAt:Number(row.confirmed_at),card:{productId:typeof card.productId==='string'?card.productId:null,last4:typeof card.last4==='string'?card.last4:null,brand:typeof card.brand==='string'?card.brand:null,rateBps:Number.isSafeInteger(card.rateBps)&&card.rateBps>=0?card.rateBps:null},providerMode:'test'};
+    });
+  }
   async function getStatus(principal,id) {
     const intent=await ownedIntent(principal,id);
     const row=(await query('SELECT * FROM pp_checkout_orders WHERE intent_id=$1',[id])).rows[0];
     const events=(await query('SELECT * FROM pp_checkout_actions WHERE intent_id=$1 ORDER BY sequence',[id])).rows.map(a=>({...a.data,sequence:a.sequence,createdAt:Number(a.created_at)}));
     let order=null;
     if(row){const attempt=(await query('SELECT payment_id FROM pp_checkout_attempts WHERE order_id=$1',[row.id])).rows[0];order={orderId:row.id,paymentId:attempt?.payment_id||null,merchantName:'PerkPilot Test Store',totalCents:row.amount_cents,currency:row.currency,card:row.data.card,estimatedRewardCents:row.data.card?.estimatedRewardCents||0,selectionReason:'Highest estimated published base reward among your authorized enrolled cards.',providerMode:'test',confirmedAt:row.confirmed_at?Number(row.confirmed_at):null};}
-    return {id:intent.id,previewId:intent.previewId,state:intent.state,maxAmountCents:intent.maxAmountCents,expiresAt:intent.expiresAt,events,order,error:intent.data.error||null};
+    const approvedCart=intent.permission?.cart || {};
+    const cart={sku:approvedCart.sku,variantId:approvedCart.variantId,name:approvedCart.name,quantity:approvedCart.quantity};
+    return {id:intent.id,previewId:intent.previewId,cart,state:intent.state,maxAmountCents:intent.maxAmountCents,expiresAt:intent.expiresAt,events,order,error:intent.data.error||null};
   }
   async function executePurchase(context,{quoteId,cardId}) {
     const {principal,intentId}=context;
@@ -286,5 +312,5 @@ export function createCheckoutService({repository,merchant,provider,authAdapter,
     if(['queued','running'].includes(intent.state)){await setState(intent,'agent_failed',{code:'AGENT_FAILED',message:messages.AGENT_FAILED});await query('UPDATE pp_checkout_intents SET revoked_at=$1 WHERE id=$2',[now(),intent.id]);await event(intent.id,typeof error?.code==='string'?error.code:'AGENT_FAILED','agent_failed');}
     });
   }
-  return {startEnrollment,completeEnrollment,listMethods,listProducts,removeMethod,createPreview,authorize,readCart,rankCards,executePurchase,getStatus,listIntents,getPaymentAction,cancel,reconcile,acceptWebhook,maintenance,revokeSession,markAgentFailed};
+  return {startEnrollment,completeEnrollment,listMethods,listProducts,importCatalogProduct,removeMethod,createPreview,authorize,readCart,rankCards,executePurchase,getStatus,listIntents,listRewardPurchases,getPaymentAction,cancel,reconcile,acceptWebhook,maintenance,revokeSession,markAgentFailed};
 }
