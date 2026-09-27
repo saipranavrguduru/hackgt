@@ -97,3 +97,11 @@ test('late agent failure and tool calls cannot overwrite confirmed payment state
   assert.equal((await f.service.getStatus(f.principal,context.intentId)).state,'confirmed');
   assert.equal((await f.service.listIntents(f.principal))[0].id,context.intentId);
 });
+
+
+test('purchase status identifies the approved product for recovery on another Explore item',async t=>{
+ const f=await checkoutFixture();t.after(f.close);const {intent,preview}=await f.prepare();
+ const status=await f.service.getStatus(f.principal,intent.id);
+ assert.deepEqual(status.cart,{sku:preview.cart.sku,variantId:preview.cart.variantId,name:preview.cart.name,quantity:preview.cart.quantity});
+ assert.equal(Object.hasOwn(status.cart,'destinationHash'),false);assert.equal(Object.hasOwn(status.cart,'providerAccountId'),false);
+});

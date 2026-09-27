@@ -1,0 +1,32 @@
+.connected-product-open{border:0;width:100%;cursor:pointer}
+.connected-product-title{border:0;background:transparent;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.connected-product-title:hover{color:var(--green);text-decoration:underline;text-underline-offset:4px}
+.connected-product-open:focus-visible,.connected-product-title:focus-visible{outline:2px solid var(--green);outline-offset:5px;border-radius:8px}
+.connected-product .product-actions .button{min-height:38px;padding:9px 14px;font-size:12px}
+.connected-product>div{min-width:0}
+.connected-product h3{overflow-wrap:anywhere}
+#sheet[data-owner="explore-checkout"]{width:min(960px,calc(100vw - 40px));max-width:calc(100vw - 40px)}
+#sheet[data-owner="explore-checkout"] .sheet-header h2{font-size:25px;line-height:1.3;overflow-wrap:anywhere}
+.explore-product-summary{display:grid;grid-template-columns:144px minmax(0,1fr);gap:28px;align-items:center;margin-bottom:24px}
+.explore-product-image{display:grid;place-items:center;aspect-ratio:1;background:var(--sage-light,#f3f6ef);border:1px solid var(--line);border-radius:18px;padding:16px;overflow:hidden}
+.explore-product-image img{width:100%;height:100%;max-height:144px;object-fit:contain}
+.explore-product-image .icon{width:48px;height:48px;color:var(--green)}
+.explore-product-price{font-size:32px;font-weight:600;letter-spacing:-1px;color:var(--ink);margin:8px 0}
+.explore-product-summary .text-button{margin-top:10px}
+.explore-sandbox-note{padding:18px 20px;background:var(--sage-light,#f3f6ef);border:1px solid var(--line);border-radius:14px;margin-bottom:28px}
+.explore-sandbox-note p{font-size:12px;line-height:1.7;margin:10px 0 0;color:var(--body)}
+[data-explore-checkout] .checkout-panel-selected{padding:0;background:transparent;border-radius:0}
+[data-explore-checkout] .checkout-panel-selected .section-heading h2{font-size:25px}
+.explore-checkout-unavailable{padding:22px 0}
+.explore-checkout-unavailable p{font-size:13px;line-height:1.7;margin:12px 0 18px}
+@media(max-width:650px){
+  #sheet[data-owner="explore-checkout"]{width:calc(100vw - 20px);max-width:calc(100vw - 20px)}
+  #sheet[data-owner="explore-checkout"] .sheet-header h2{font-size:21px}
+  .explore-product-summary{grid-template-columns:82px minmax(0,1fr);gap:17px;align-items:start}
+  .explore-product-image{padding:10px;border-radius:13px}
+  .explore-product-price{font-size:27px}
+  .explore-product-summary .eyebrow{font-size:8px}
+  .explore-sandbox-note{padding:15px}
+  .connected-product .product-actions .button{width:100%;justify-content:center}
+  .explore-checkout-unavailable .product-actions{align-items:flex-start}
+}

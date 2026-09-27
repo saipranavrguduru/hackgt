@@ -3,6 +3,7 @@
 (() => {
   const state = { initialized:false, loading:null, identity:null, generation:0, session:null, dashboard:null, products:null, answer:null, lastSearchQuery:null, query:'', error:null, searchError:null, answerError:null };
   let plaidLoader;
+  let productSequence=0, openedProductId=null, productController=null;
   const app = () => window.App;
   const esc = value => app().escapeHtml(value ?? '');
   const money = value => app().money(value);
@@ -10,6 +11,7 @@
   const accountMoney = account => Number.isSafeInteger(account.balanceCents) && /^[A-Z]{3}$/.test(account.currency || '') ? new Intl.NumberFormat('en-US',{style:'currency',currency:account.currency}).format(account.balanceCents/100) : 'Unknown';
 
   function reset() {
+    closeProduct();
     Object.assign(state,{initialized:false,loading:null,identity:app()?.state.data?.user?.id || null,generation:state.generation+1,session:null,dashboard:null,products:null,answer:null,lastSearchQuery:null,query:'',error:null,searchError:null,answerError:null});
   }
   function ensureIdentity() {
@@ -98,7 +100,44 @@
   function productsMarkup(result) {
     if (!result) return '<div class="connected-empty compact"><strong>Search current products.</strong><p>Search listings from the configured catalog using your saved shopping location.</p></div>';
     if (!result.products?.length) return '<div class="connected-empty compact"><strong>No current listings found.</strong><p>Try a broader product name or another location.</p></div>';
-    return `<p class="fine-note connected-result-meta">${result.products.length} listings${result.location?` near ${esc(result.location)}`:''} · observed ${esc(new Date(result.observedAt).toLocaleString())}</p>${result.products.map(product=>`<article class="product-card connected-product"><div class="product-art">${product.imageUrl?`<img src="${esc(product.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:`<span>${icon('bag')}</span>`}</div><div><h3>${esc(product.name)}</h3><p>${esc(product.merchantName)} · ${esc(product.source)}</p><div class="product-actions"><a class="text-button" href="${esc(product.url)}" target="_blank" rel="noopener noreferrer">View product options ${icon('external')}</a></div><small class="fine-note">${esc(product.priceNote)}</small></div><strong class="product-price">${money(product.priceCents)}</strong></article>`).join('')}`;
+    return `<p class="fine-note connected-result-meta">${result.products.length} listings${result.location?` near ${esc(result.location)}`:''} · observed ${esc(new Date(result.observedAt).toLocaleString())}</p>${result.products.map(product=>`<article class="product-card connected-product"><button type="button" class="product-art connected-product-open" data-action="connected-product" data-id="${esc(product.id)}" aria-label="View ${esc(product.name)}">${safeLink(product.imageUrl)?`<img src="${esc(safeLink(product.imageUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer">`:`<span>${icon('bag')}</span>`}</button><div><h3><button type="button" class="connected-product-title" data-action="connected-product" data-id="${esc(product.id)}">${esc(product.name)}</button></h3><p>${esc(product.merchantName)} · ${esc(product.source)}</p><div class="product-actions"><button type="button" class="button secondary" data-action="connected-product" data-id="${esc(product.id)}">${product.checkoutReference?'Buy with PerkPilot':'View product'} ${icon('arrow')}</button>${safeLink(product.url)?`<a class="text-button" href="${esc(safeLink(product.url))}" target="_blank" rel="noopener noreferrer">Retailer listing ${icon('external')}</a>`:''}</div><small class="fine-note">${esc(product.priceNote)}${product.checkoutReference?' · PerkPilot checkout is in test mode.':''}</small></div><strong class="product-price">${productPrice(product)}</strong></article>`).join('')}`;
+  }
+
+  function productPrice(product) {
+    if(!Number.isSafeInteger(product.priceCents))return 'Price unavailable';
+    if(/^[A-Z]{3}$/.test(product.currency || ''))return new Intl.NumberFormat('en-US',{style:'currency',currency:product.currency}).format(product.priceCents/100);
+    return money(product.priceCents);
+  }
+  function safeLink(value) { try{const url=new URL(value);return ['http:','https:'].includes(url.protocol) && !url.username && !url.password?url.href:null;}catch{return null;} }
+  function closeProduct() {
+    productSequence++;openedProductId=null;
+    productController?.dispose?.({clearRecovery:false});productController=null;
+  }
+  async function openProduct(id) {
+    ensureIdentity();
+    const product=state.products?.products?.find(value=>value.id===id);
+    if(!product || isSample())throw new Error('Search again to open this product.');
+    const image=safeLink(product.imageUrl),url=safeLink(product.url);
+    const hero=`<div class="explore-product-summary">${image?`<div class="explore-product-image"><img src="${esc(image)}" alt="${esc(product.name)}" referrerpolicy="no-referrer"></div>`:`<div class="explore-product-image">${icon('bag')}</div>`}<div><span class="eyebrow">Your Explore find</span><p class="explore-product-price">${productPrice(product)}</p><p class="fine-note">Observed merchandise price · ${esc(product.merchantName)}<br>${esc(product.source)}${product.observedAt?` · ${esc(new Date(product.observedAt).toLocaleDateString())}`:''}</p>${url?`<a class="text-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open retailer listing ${icon('external')}</a>`:''}</div></div><div class="explore-sandbox-note"><span class="pill neutral">Sandbox checkout</span><p>Try this product through PerkPilot Test Store with your best enrolled test card. Test totals include 10% test tax and $5 test shipping. No real money moves and no order is sent to ${esc(product.merchantName || 'the retailer')}.</p></div>`;
+    const unavailable=product.checkoutUnavailableReason || 'Sandbox checkout is unavailable for this listing. Refresh your search for eligible products priced within the $500 total limit.';
+    app().showSheet(product.name,hero+(product.checkoutReference?'<div data-explore-checkout aria-live="polite"><p class="fine-note">Preparing your selected product…</p></div>':`<div class="explore-checkout-unavailable" role="status"><h3>Checkout unavailable</h3><p>${esc(unavailable)}</p><button type="button" class="button secondary" data-action="connected-product-search">Refresh search</button></div>`),{owner:'explore-checkout'});
+    openedProductId=id;
+    const request=++productSequence,generation=state.generation,root=document.querySelector('[data-explore-checkout]');
+    if(!product.checkoutReference)return;
+    const current=()=>{
+      ensureIdentity();const sheet=document.querySelector('#sheet');
+      return request===productSequence && generation===state.generation && app().state.page==='explore' && sheet?.open && sheet.dataset.owner==='explore-checkout' && root?.isConnected;
+    };
+    try {
+      const result=await app().api('/agent-checkout/catalog-products','POST',{checkoutReference:product.checkoutReference});
+      if(!current())return;
+      if(!result.product?.sku || !result.product?.variantId || !window.CheckoutUI)throw new Error('The selected product could not be prepared. Refresh your search and try again.');
+      productController=window.CheckoutUI.mount({root,api:app().api,selection:{sku:result.product.sku,variantId:result.product.variantId},walletCards:app().dataArray(app().state.data.cards),cardProducts:app().dataArray(app().state.data.cardProducts),identity:state.identity,sample:false,onWalletChanged:()=>app().refresh()});
+    } catch(error) {
+      if(!current())return;
+      const message=error.code==='NOT_FOUND'?'Sandbox checkout is not enabled. Start the project with checkout enabled, then try again.':error.message;
+      root.innerHTML=`<div class="explore-checkout-unavailable" role="alert"><h3>Could not prepare checkout</h3><p>${esc(message)}</p><div class="product-actions"><button type="button" class="button secondary" data-action="connected-product" data-id="${esc(id)}">Try again</button><button type="button" class="text-button" data-action="connected-product-search">Refresh search</button></div></div>`;
+    }
   }
 
   function dashboardPanel() {
@@ -118,7 +157,7 @@
 
   function renderExplore() {
     ensureIdentity();
-    const heading=app().pageHeading('A good fit starts with a question.', 'Search current products and ask PerkPilot to help compare your options.');
+    const heading=app().pageHeading('A good fit starts with a question.', 'Find a product, compare your options, and try checkout with your best card.');
     if(!state.initialized && !isSample()) { queueMicrotask(()=>load());return heading+loadingMarkup(); }
     const d=state.dashboard,user=d?.user;
     const locationCopy=user?.shoppingLocation?`Searching near ${esc(user.shoppingLocation)}.`:'Using the catalog default location until you choose a city.';
@@ -162,6 +201,8 @@
 
   async function action(name, target) {
     switch(name) {
+      case 'connected-product':await openProduct(target.dataset.id);break;
+      case 'connected-product-search':app().closeSheet();await search(state.query);break;
       case 'connected-refresh':await refresh();break;
       case 'connected-consent':await api('/consent','POST',{consent:!state.dashboard.user.consent});await refresh();app().toast('Connected insight preference saved.');break;
       case 'connected-link':{ensureIdentity();const generation=state.generation;const result=await api('/plaid/link-token','POST',{});ensureIdentity();if(generation!==state.generation)break;sessionStorage.setItem('perkpilot_link_token',JSON.stringify({identity:state.identity,token:result.linkToken}));await openPlaid(result.linkToken);break;}
@@ -213,5 +254,5 @@
     update();
   }
 
-  window.ConnectedUI={render,renderExplore,action,submit,search,authenticate,logout,refresh,reset,productById:id=>state.products?.products?.find(product=>product.id===id)};
+  window.ConnectedUI={render,renderExplore,action,submit,search,authenticate,logout,refresh,reset,openProduct,closeProduct,currentProductId:()=>openedProductId,productById:id=>state.products?.products?.find(product=>product.id===id)};
 })();

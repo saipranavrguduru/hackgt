@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false}={}) {
+function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostResponse=false,lostAfterSuccess=false,discovered=[],walletCards=[{id:'card-a',productId:'active-cash',name:'Active Cash'}],savedMethods=[{id:'method',cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242'}],resourceErrors={},sample=false,selection=null,storeProducts=null}={}) {
   const requests=[],timers=[],store=new Map(recovered?[['perkpilot-checkout-intent',recovered]]:[]);
   const root={innerHTML:'',addEventListener(){},removeEventListener(){},querySelector(){return null;}};
   const cart={sku:'everyday-headphones',variantId:'black',quantity:1,name:'Headphones <script>evil()</script>',merchantName:'PerkPilot Test Store',currency:'USD',merchandiseCents:9000,taxCents:900,shippingCents:500,totalCents:10400,destinationLabel:'Saved test destination'};
@@ -13,16 +13,16 @@ function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostRespo
     requests.push({path,method,body});
     if(resourceErrors[path])throw new Error(resourceErrors[path]);
     if(path.endsWith('/capabilities'))return capabilities;
-    if(path.endsWith('/products'))return {products:[{...cart,stock:100}],destinations:[{id:'destination',label:'Atlanta test address'}]};
+    if(path.endsWith('/products'))return {products:(storeProducts||[{...cart,stock:100}]).map(p=>({...p})),destinations:[{id:'destination',label:'Atlanta test address'}]};
     if(path.endsWith('/methods')&&method==='GET')return savedMethods;
-    if(path.endsWith('/previews'))return {id:lostAfterSuccess?`preview-${++previewCount}`:'preview',cart,cards:[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208}],expiresAt:Date.now()+300000};
+    if(path.endsWith('/previews')){const product=storeProducts?.find(p=>p.sku===body.sku&&p.variantId===body.variantId);const previewCart=product?{...cart,...product,quantity:body.quantity,merchandiseCents:product.merchandiseCents*body.quantity,taxCents:product.taxCents*body.quantity,totalCents:(product.merchandiseCents+product.taxCents)*body.quantity+product.shippingCents}:cart;return {id:lostAfterSuccess?`preview-${++previewCount}`:'preview',cart:previewCart,cards:[{cardId:'card-a',productId:'active-cash',brand:'visa',last4:'4242',estimatedRewardCents:208}],expiresAt:Date.now()+300000};}
     if(path.endsWith('/intents')&&method==='GET')return discovered;
     if(path.endsWith('/intents')&&method==='POST') {approvalCount++;if(delayed)await new Promise(r=>{release=r;});if(lostAfterSuccess&&approvalCount===1){const prior={id:'prior-confirmed',previewId:body.previewId,state:'confirmed',events:[],order:{confirmedAt:Date.now()},maxAmountCents:body.maxAmountCents};discovered.push(prior);return prior;}if(lostAfterSuccess)throw new Error('Response was lost before commit.');if(lostResponse){discovered.push({id:'accepted-intent',previewId:body.previewId,state:'payment_pending'});throw new Error('Response was lost.');}const value={id:'intent',previewId:body.previewId,state:'queued',events:[],order:null,maxAmountCents:body.maxAmountCents};discovered.push(value);return value;}
     if(path.endsWith('/enrollments'))return {id:'setup',clientSecret:'setup_secret_sensitive'};
     if(path.endsWith('/complete'))return {cardId:'card-a'};
     if(path.endsWith('/payment-action'))return {clientSecret:'payment_secret_sensitive'};
     if(path.endsWith('/reconcile'))return {id:'intent',state:'payment_pending',events:[],order:null};
-    if(path.includes('/intents/')){const id=path.split('/').at(-1),entry=discovered.find(value=>value.id===id);return {id,previewId:entry?.previewId||'preview',state:entry?.state==='confirmed'?'confirmed':'payment_pending',events:[{code:'PAYMENT_DISPATCHED',state:'payment_pending'}],order:{paymentId:'pi_pending',totalCents:10400,card:{last4:'4242'}}};}
+    if(path.includes('/intents/')){const id=path.split('/').at(-1),entry=discovered.find(value=>value.id===id);return {...entry,id,previewId:entry?.previewId||'preview',state:entry?.state==='confirmed'?'confirmed':'payment_pending',events:[{code:'PAYMENT_DISPATCHED',state:'payment_pending'}],order:entry?.order||{paymentId:'pi_pending',totalCents:10400,card:{last4:'4242'}}};}
     return {};
   };
   const stripeCalls=[];
@@ -30,8 +30,8 @@ function fixture({ready=true,enabled=true,recovered=null,delayed=false,lostRespo
   const window={Stripe:()=>stripe,localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},location:{href:'http://localhost:3000/#connected'}};
   const context={window,document:{},console,Intl,URL,Date,Promise,queueMicrotask,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){}};
   vm.createContext(context);vm.runInContext(readFileSync(new URL('../public/checkout-ui.js',import.meta.url),'utf8'),context);
-  const ui=window.CheckoutUI.mount({root,api,identity:'alice',walletCards,sample});
-  const remount=(identity='alice')=>{const nextRoot={...root,innerHTML:''};const nextUI=window.CheckoutUI.mount({root:nextRoot,api,identity,walletCards:[{id:'card-a',productId:'active-cash',name:'Active Cash'}]});return {ui:nextUI,root:nextRoot};};
+  const ui=window.CheckoutUI.mount({root,api,identity:'alice',walletCards,sample,selection});
+  const remount=(identity='alice',nextSelection=selection)=>{const nextRoot={...root,innerHTML:''};const nextUI=window.CheckoutUI.mount({root:nextRoot,api,identity,walletCards:[{id:'card-a',productId:'active-cash',name:'Active Cash'}],selection:nextSelection});return {ui:nextUI,root:nextRoot};};
   return {ui,root,requests,timers,store,stripeCalls,discovered,capabilities,resourceErrors,remount,release:()=>release?.()};
 }
 test('disabled checkout provides working setup actions without unusable payment forms or disabled API calls',async()=>{
@@ -154,4 +154,86 @@ test('a late approval response cannot populate the next signed-in identity',asyn
   const pending=f.ui.buy(11000);f.ui.dispose();const other=f.remount('bob');await other.ui.ready;f.release();await pending;
   assert.doesNotMatch(other.root.innerHTML,/Processing test payment|Order confirmed|Checking your existing approval/);
   assert.equal(f.store.size,0);
+});
+
+const catalogProducts=[
+  {sku:'everyday-headphones',variantId:'black',name:'Everyday Headphones',merchandiseCents:9000,taxCents:900,shippingCents:500,stock:100},
+  {sku:'catalog-shoes',variantId:'blue',name:'Trail Shoes <blue>',merchandiseCents:12000,taxCents:1200,shippingCents:500,stock:10},
+  {sku:'catalog-shoes',variantId:'red',name:'Trail Shoes red',merchandiseCents:12500,taxCents:1250,shippingCents:500,stock:10}
+];
+const shoeSelection={sku:'catalog-shoes',variantId:'blue'};
+
+test('selected checkout locks the exact server product and variant while preserving editable quantity',async()=>{
+  const f=fixture({selection:shoeSelection,storeProducts:catalogProducts});await f.ui.ready;
+  assert.match(f.root.innerHTML,/Trail Shoes &lt;blue&gt;/);
+  assert.doesNotMatch(f.root.innerHTML,/<select name="sku"|Everyday Headphones|Trail Shoes red/);
+  assert.match(f.root.innerHTML,/name="quantity" type="number"[^>]*value="1" required>/);
+  await f.ui.preparePreview({quantity:2,destinationId:'destination'});
+  const request=f.requests.find(r=>r.path.endsWith('/previews'));
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body)),{sku:'catalog-shoes',variantId:'blue',quantity:2,destinationId:'destination'});
+  assert.match(f.root.innerHTML,/\$269\.00/);
+  await assert.rejects(f.ui.preparePreview({sku:'everyday-headphones',variantId:'black',quantity:1,destinationId:'destination'}),/selected product/i);
+  await assert.rejects(f.ui.preparePreview({sku:'catalog-shoes',variantId:'red',quantity:1,destinationId:'destination'}),/selected product/i);
+  assert.equal(f.requests.filter(r=>r.path.endsWith('/previews')).length,1);
+  await f.ui.buy(27000);
+  assert.equal(f.requests.filter(r=>r.path.endsWith('/intents')&&r.method==='POST').length,1);
+});
+
+test('missing or unavailable selected products never fall back to the default store item',async()=>{
+  for(const selection of [{sku:'removed',variantId:'black'},{sku:'catalog-shoes',variantId:'missing'},{sku:'sold-out',variantId:'blue'},{}]){
+    const f=fixture({selection,storeProducts:[...catalogProducts,{sku:'sold-out',variantId:'blue',name:'Sold out shoes',stock:0}]});await f.ui.ready;
+    assert.match(f.root.innerHTML,/selected product.*(?:unavailable|available)/i);
+    assert.match(f.root.innerHTML,/reopen.*product|return.*product/i);
+    assert.doesNotMatch(f.root.innerHTML,/data-checkout-form="preview"|<select name="sku"|Everyday Headphones/);
+    await assert.rejects(f.ui.preparePreview({quantity:1,destinationId:'destination'}),/selected product/i);
+    assert.equal(f.requests.some(r=>r.path.endsWith('/previews')),false);
+  }
+});
+
+test('a selected product preview cannot authorize a mismatched server cart',async()=>{
+  const products=[...catalogProducts];
+  const selected=fixture({selection:shoeSelection,storeProducts:products});await selected.ui.ready;
+  // Simulate a server regression that returns its default product after removal.
+  products.splice(0,products.length);
+  await assert.rejects(selected.ui.preparePreview({quantity:1,destinationId:'destination'}),/selected product/i);
+  await assert.rejects(selected.ui.buy(11000));
+  assert.equal(selected.requests.some(r=>r.path.endsWith('/intents')&&r.method==='POST'),false);
+});
+
+test('selected checkout omits confirmed receipts from another product or unknown product',async()=>{
+  for(const cart of [{sku:'everyday-headphones',variantId:'black',name:'Everyday Headphones'},undefined]){
+    const f=fixture({selection:shoeSelection,storeProducts:catalogProducts,recovered:'old-order',discovered:[{id:'old-order',previewId:'old-preview',state:'confirmed',cart,order:{confirmedAt:1,merchantName:'PerkPilot Test Store',totalCents:10400}}]});await f.ui.ready;
+    assert.doesNotMatch(f.root.innerHTML,/data-checkout-receipt|Order confirmed/);
+    await f.ui.preparePreview({quantity:1,destinationId:'destination'});
+    assert.match(f.root.innerHTML,/data-checkout-form="buy"/);
+  }
+});
+
+test('selected checkout recovers its own confirmed item with the product name in the receipt',async()=>{
+  const f=fixture({selection:shoeSelection,storeProducts:catalogProducts,discovered:[{id:'shoe-order',previewId:'shoe-preview',state:'confirmed',cart:{...shoeSelection,name:'Trail Shoes <blue>',quantity:2},order:{confirmedAt:1,merchantName:'PerkPilot Test Store',totalCents:26900}}]});await f.ui.ready;
+  const receipt=f.root.innerHTML.split('data-checkout-receipt')[1];
+  assert.ok(receipt,'Matching confirmed product has a receipt');
+  assert.match(receipt,/Trail Shoes &lt;blue&gt;/);
+  assert.match(receipt,/Quantity 2/);
+});
+
+test('another product pending purchase is named and blocks the selected checkout',async()=>{
+  const f=fixture({selection:shoeSelection,storeProducts:catalogProducts,discovered:[{id:'headphone-order',state:'payment_pending',cart:{sku:'everyday-headphones',variantId:'black',name:'Everyday Headphones',quantity:1}}]});await f.ui.ready;
+  assert.match(f.root.innerHTML,/Previous purchase/);
+  assert.match(f.root.innerHTML,/Everyday Headphones/);
+  await assert.rejects(f.ui.preparePreview({quantity:1,destinationId:'destination'}),/Finish or cancel/);
+  assert.equal(f.requests.some(r=>r.path.endsWith('/intents')&&r.method==='POST'),false);
+});
+
+test('switching selected products during approval recovers the first purchase without dispatching the second',async()=>{
+  const f=fixture({selection:shoeSelection,storeProducts:catalogProducts,delayed:true});await f.ui.ready;
+  await f.ui.preparePreview({quantity:1,destinationId:'destination'});
+  const pending=f.ui.buy(14000);f.ui.dispose({clearRecovery:false});
+  const next=f.remount('alice',{sku:'everyday-headphones',variantId:'black'});await next.ui.ready;
+  assert.match(next.root.innerHTML,/Checking your existing approval/);
+  f.release();await pending;
+  assert.match(next.root.innerHTML,/Previous purchase/);
+  assert.match(next.root.innerHTML,/Trail Shoes &lt;blue&gt;/);
+  await assert.rejects(next.ui.preparePreview({quantity:1,destinationId:'destination'}),/Finish or cancel/);
+  assert.equal(f.requests.filter(r=>r.path.endsWith('/intents')&&r.method==='POST').length,1);
 });

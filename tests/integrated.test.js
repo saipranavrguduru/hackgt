@@ -180,3 +180,46 @@ test('deleting a previously linked legacy profile also clears its portal-owned o
     assert.deepEqual(removed.sort(),['token-linked','token-orphan']);
   },{plaid:{configured:true,environment:'sandbox',remove:async token=>{removed.push(token);}}});
 });
+
+
+test('Explore issues checkout references bound to the portal owner and current session',async()=>{
+ let clock=1000;
+ const listing={id:'catalog-1',name:'Observed headphones',merchantName:'External retailer',priceCents:9999,currency:'USD',availability:'unknown',url:'https://example.test/headphones',observedAt:'2026-09-27T12:00:00Z',source:'Fixture provider'};
+ await integratedFixture(async({app,request})=>{
+  const registered=await request('/api/v1/auth/register','POST',{name:'Shopper',email:'catalog@example.test',password:'catalog-password-2026'});
+  const result=await request('/api/products?q=headphones','GET',undefined,registered.cookie);
+  assert.equal(result.status,200);const reference=result.body.products[0].checkoutReference;
+  assert.match(reference,/^[0-9a-f-]{36}$/);assert.match(result.body.products[1].checkoutUnavailableReason,/500/);
+  assert.equal(result.body.products[1].checkoutReference,undefined);assert.equal(JSON.stringify(result.body).includes('sessionDigest'),false);
+  const session=app.demo.auth.lookup(registered.cookie.split('=')[1]);
+  const principal={userId:registered.body.user.id,subjectKey:'portal:'+registered.body.user.id,sessionDigest:session.digest};
+  const snapshot=app.connected.resolveCatalogReference(principal,reference);
+  assert.equal(snapshot.priceCents,9999);listing.priceCents=1;
+  assert.equal(app.connected.resolveCatalogReference(principal,reference).priceCents,9999,'provider cache mutation cannot change the observed snapshot');
+  assert.throws(()=>app.connected.resolveCatalogReference({...principal,sessionDigest:'other-session'},reference),{code:'CATALOG_REFERENCE_EXPIRED'});
+  assert.throws(()=>app.connected.resolveCatalogReference({...principal,subjectKey:'portal:22222222-2222-4222-8222-222222222222'},reference),{code:'CATALOG_REFERENCE_EXPIRED'});
+  clock+=15*60*1000;
+  assert.throws(()=>app.connected.resolveCatalogReference(principal,reference),{code:'CATALOG_REFERENCE_EXPIRED'});
+ },{checkoutCatalogOptions:{now:()=>clock},serpapi:{configured:true,search:async()=>({products:[listing,{...listing,id:'expensive',priceCents:50000}],observedAt:listing.observedAt})}});
+});
+
+test('live Explore selection reaches checkout runtime without browser prices or payment enrollment',async()=>{
+ const {checkoutFixture}=await import('./helpers/checkout-fixture.js');
+ const {createCheckoutRuntime}=await import('../src/checkout-runtime.js');
+ const f=await checkoutFixture();
+ try{await integratedFixture(async({app,request})=>{
+  const runtime=await createCheckoutRuntime({auth:app.demo.auth,store:app.demo.store,provider:f.provider,config:{enabled:true,origin:app.origin,repository:f.repository,merchant:f.merchant,agent:{configured:true},resolveCatalogReference:app.connected.resolveCatalogReference}});
+  app.demo.setCheckoutRuntime(runtime);
+  try{
+   const buyer=await request('/api/v1/auth/register','POST',{name:'Buyer',email:'explore-buyer@example.test',password:'buyer-password-2026'});
+   const search=await request('/api/products?q=travel','GET',undefined,buyer.cookie);
+   const checkoutReference=search.body.products[0].checkoutReference;
+   const imported=await request('/api/v1/agent-checkout/catalog-products','POST',{checkoutReference},buyer.cookie);
+   assert.equal(imported.status,201);assert.equal(imported.body.product.name,'Observed travel bag');assert.equal(imported.body.product.merchandiseCents,5000);assert.equal(imported.body.product.taxCents,500);assert.equal(imported.body.product.shippingCents,500);assert.equal(imported.body.destinations.length,1);assert.equal(f.provider.calls.length,0);
+   const other=await request('/api/v1/auth/register','POST',{name:'Other Buyer',email:'explore-other@example.test',password:'buyer-password-2026'});
+   assert.equal((await request('/api/v1/agent-checkout/catalog-products','POST',{checkoutReference},other.cookie)).status,409);
+   const catalog=await request('/api/v1/agent-checkout/products','GET',undefined,other.cookie);
+   assert.equal(catalog.body.products.some(p=>p.sku===imported.body.product.sku),false);
+  }finally{await runtime.close();}
+ },{serpapi:{configured:true,search:async()=>({products:[{id:'bag',name:'Observed travel bag',merchantName:'Observed retailer',priceCents:5000,currency:'USD',url:'https://example.test/bag',availability:'unknown'}]})}});}finally{await f.close();}
+});

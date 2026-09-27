@@ -45,10 +45,12 @@ async function api(path, method = 'GET', body) {
   return result;
 }
 
-let toastTimer;
+let toastTimer, sheetGeneration=0;
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').classList.remove('visible'), 4300); }
-function showSheet(title, body, options = {}) { if(options.owner!=='location')window.LocationUI?.reset(); $('#sheet').dataset.owner=options.owner || ''; $('#sheet').innerHTML = `<header class="sheet-header"><h2 id="sheet-title">${escapeHtml(title)}</h2><button class="icon-button" data-action="close" aria-label="Close dialog">${icon('close')}</button></header><div class="sheet-body">${body}</div>`; if (!$('#sheet').open) $('#sheet').showModal(); }
-function closeSheet() { window.LocationUI?.reset(); $('#sheet').close(); }
+function showSheet(title, body, options = {}) { sheetGeneration++; if($('#sheet').dataset.owner==='explore-checkout')window.ConnectedUI?.closeProduct(); if(options.owner!=='location')window.LocationUI?.reset(); $('#sheet').dataset.owner=options.owner || ''; $('#sheet').innerHTML = `<header class="sheet-header"><h2 id="sheet-title">${escapeHtml(title)}</h2><button class="icon-button" data-action="close" aria-label="Close dialog">${icon('close')}</button></header><div class="sheet-body">${body}</div>`; if (!$('#sheet').open) $('#sheet').showModal(); }
+function clearSheetOwner() { if($('#sheet').dataset.owner==='explore-checkout')window.ConnectedUI?.closeProduct(); $('#sheet').dataset.owner=''; }
+function closeSheet() { sheetGeneration++;clearSheetOwner();window.LocationUI?.reset();$('#sheet').close(); }
+function hasExploreCheckoutSheet() { return $('#sheet').open && $('#sheet').dataset.owner==='explore-checkout' && appState.page==='explore' && window.ConnectedUI?.currentProductId(); }
 function formError(form, message) { let el = form.querySelector('.error-message'); if (!el) { el = document.createElement('div'); el.className='error-message'; el.setAttribute('role','alert'); form.prepend(el); } el.textContent = message; }
 function dataArray(value) { return Array.isArray(value) ? value : []; }
 function preferences() { const p = appState.data?.profile?.preferences || appState.data?.user?.preferences || appState.data?.preferences || {}; return {...p, excludedTransactionIds: p.excludedTransactionIds || p.excludedTransactions || []}; }
@@ -69,7 +71,7 @@ function renderAuth() {
 }
 
 function renderShell() {
-  window.CheckoutUI?.dispose({clearRecovery:false});
+  if(!hasExploreCheckoutSheet())window.CheckoutUI?.dispose({clearRecovery:false});
   const d = appState.data; const user = d.user || {}; const name = user.name || 'Your profile';
   const pages = [['for-you','For You','home'],['spend','Spend DNA','spend'],['connected','Connected','card'],['explore','Explore','explore'],['wallet','Wallet','wallet'],['checkout','Test Store','bag'],['saved','Saved','saved']];
   const nav = pages.map(([id,label,symbol])=>`<a href="#${id}" class="nav-item ${appState.page===id?'active':''}" ${appState.page===id?'aria-current="page"':''}>${icon(symbol)}<span>${label}</span></a>`).join('');
@@ -80,11 +82,10 @@ function renderShell() {
 
 function pageHeading(title, subtitle, right = '', intro = '') { return `<header class="page-heading"><div>${intro?`<p class="intro">${intro}</p>`:''}<h1>${title}</h1>${subtitle?`<p class="subtitle">${subtitle}</p>`:''}</div>${right}</header>`; }
 function renderPage() {
-  window.CheckoutUI?.dispose({clearRecovery:false});
+  if(!hasExploreCheckoutSheet())window.CheckoutUI?.dispose({clearRecovery:false});
   const pages = {'for-you':renderHome,spend:renderSpend,connected:()=>window.ConnectedUI.render(),wallet:renderWallet,saved:renderSaved,explore:()=>window.ResearchUI.render(),checkout:()=>pageHeading('Your best card. One purchase.', 'Approve your terms. PerkPilot checks the cart and selects your best enrolled card.')+'<div id="checkout-root"></div>'};
   $('#main-content').innerHTML = (pages[appState.page] || renderHome)();
   if(appState.page==='wallet')$('#main-content').insertAdjacentHTML('beforeend','<div id="checkout-root"></div>');
-  if(appState.page==='explore' && !isSample())$('#main-content').insertAdjacentHTML('beforeend','<div class="surface section"><h2>Let PerkPilot handle checkout.</h2><p>Try a bounded purchase with your best enrolled test card in our controlled store.</p><a class="button secondary" href="#checkout">Visit the PerkPilot Test Store</a></div>');
   if($('#checkout-root'))window.CheckoutUI?.mount({root:$('#checkout-root'),api,walletCards:dataArray(appState.data.cards),cardProducts:dataArray(appState.data.cardProducts),identity:appState.data.user.id,sample:!!isSample(),onWalletChanged:refresh});
   document.title = `${{'for-you':'For You',spend:'Spend DNA',connected:'Connected',wallet:'Wallet',saved:'Saved',explore:'Explore',checkout:'Test Store'}[appState.page] || 'For You'} · PerkPilot`;
 }
@@ -222,7 +223,7 @@ async function handleAction(target) {
     case 'mute': {const kind=target.dataset.kind; await updatePreferences({[kind]:[...new Set([...dataArray(preferences()[kind]),target.dataset.value])]});closeSheet();break;}
     case 'unmute': case 'remove-interest': {const kind=a==='remove-interest'?'interests':target.dataset.kind;await updatePreferences({[kind]:dataArray(preferences()[kind]).filter(v=>v!==target.dataset.value)});break;}
     case 'exclude-transaction': await updatePreferences({excludedTransactionIds:[...new Set([...dataArray(preferences().excludedTransactionIds),id])]},'Purchase excluded from your spending profile.');closeSheet();break;
-    case 'add-card': showAddCard();break;
+    case 'add-card': {const returnProduct=$('#sheet').dataset.owner==='explore-checkout'?window.ConnectedUI?.currentProductId():null;showAddCard();if(returnProduct)$('#add-card-form').dataset.returnProduct=returnProduct;break;}
     case 'card-detail': showCard(id);break;
     case 'remove-card': await api(`/finance/cards/${encodeURIComponent(id)}`,'DELETE');closeSheet();await refresh();toast('Card removed from your wallet.');break;
     case 'transaction': {const t=dataArray(appState.data.transactions).find(t=>t.id===id);showSheet(t.merchantName||t.description||'Transaction',`<div class="quote-price">${money(t.amountCents)}</div><p>${escapeHtml(human(t.category))} · ${shortDate(t.date||t.postedAt)}</p><span class="pill neutral">${escapeHtml(t.status||'posted')} · synthetic</span><div class="divider"></div><p class="fine-note">${escapeHtml(t.type||'Purchase')} ${t.cardId?`· ${escapeHtml(appState.data.cards.find(c=>c.id===t.cardId)?.name||'Sample card')}`:''}</p>${button('This was a gift — exclude from DNA','exclude-transaction',`data-id="${escapeHtml(id)}"`,'secondary')}`);break;}
@@ -255,7 +256,16 @@ document.addEventListener('submit',async(event)=>{
       case 'auth-form':await api(`/auth/${appState.authMode}`,'POST',fields);window.ConnectedUI?.reset();await refresh();if(fields.shoppingLocation)await window.ConnectedUI?.submit({id:'connected-location-form'},{location:fields.shoppingLocation});await handleHandoff();break;
       case 'global-search': await window.ResearchUI.search(fields.query);break;
       case 'interest-form':await updatePreferences({interests:[...new Set([...dataArray(preferences().interests),fields.interest.trim()])]},'Interest added. Your finds have been refreshed.');break;
-      case 'add-card-form':await api('/finance/cards','POST',{productId:fields.productId});closeSheet();await refresh();toast('Self-reported card added.');break;
+      case 'add-card-form':{
+        const returnProduct=form.dataset.returnProduct,identity=appState.data.user.id,started=sheetGeneration;
+        await api('/finance/cards','POST',{productId:fields.productId});
+        if(appState.data?.user?.id!==identity)break;
+        const stillCurrent=started===sheetGeneration && $('#sheet').open && form.isConnected && $('#sheet').contains(form);
+        if(stillCurrent)closeSheet();
+        const afterClose=sheetGeneration;await refresh();
+        if(stillCurrent && returnProduct && afterClose===sheetGeneration && !$('#sheet').open && appState.page==='explore' && appState.data?.user?.id===identity)await window.ConnectedUI?.openProduct(returnProduct);
+        toast('Self-reported card added.');break;
+      }
       case 'mission-form':await api(form.dataset.id?`/commerce/missions/${encodeURIComponent(form.dataset.id)}`:'/commerce/missions',form.dataset.id?'PATCH':'POST',{request:fields.request,category:fields.category,maxAmountCents:fields.budget?Math.round(Number(fields.budget)*100):null,priceLimitBasis:fields.priceLimitBasis});closeSheet();appState.homeTab='missions';appState.page='for-you';location.hash='for-you';await refresh();toast('Your mission is ready.');break;
       case 'assistant-form':await askAssistant(fields.message);break;
       case 'checkout-form':{const result=await api(`/checkout/sessions/${encodeURIComponent(form.dataset.id)}/confirm`,'POST',{approved:fields.approved==='on',outcome:fields.outcome});const purchase=result.purchase||result;await refresh();if(purchase.id&&purchase.status!=='declined'&&purchase.status!=='failed'){await showPurchase(purchase.id);toast('Simulated purchase approved. No real money moved.');}else{showSheet('Simulated payment not completed',`<div class="info-note amber">${icon('info')}<span>${escapeHtml(result.message||'The controlled payment did not complete. No purchase savings were recognized.')}</span></div><div class="sheet-footer">${button('Return to your quote','refresh-quote','','secondary')}</div>`);}break;}
@@ -265,11 +275,11 @@ document.addEventListener('submit',async(event)=>{
 });
 document.addEventListener('change',(event)=>{window.CardsUI?.change(event);window.LocationUI?.change(event);window.ResearchUI?.change(event);});
 document.addEventListener('input',(event)=>window.LocationUI?.change(event));
-window.addEventListener('hashchange',()=>{if($('#sheet').dataset.owner==='location')closeSheet();else window.LocationUI?.reset();if(!appState.data)return;appState.page=location.hash.slice(1)||'for-you';if(!['for-you','spend','connected','wallet','saved','explore','checkout'].includes(appState.page))appState.page='for-you';renderShell();window.scrollTo(0,0);});
+window.addEventListener('hashchange',()=>{if(['location','explore-checkout'].includes($('#sheet').dataset.owner))closeSheet();else window.LocationUI?.reset();if(!appState.data)return;appState.page=location.hash.slice(1)||'for-you';if(!['for-you','spend','connected','wallet','saved','explore','checkout'].includes(appState.page))appState.page='for-you';renderShell();window.scrollTo(0,0);});
 $('#sheet').addEventListener('click',(event)=>{if(event.target===$('#sheet')){const r=$('#sheet').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeSheet();}});
 
-$('#sheet').addEventListener('cancel',()=>window.LocationUI?.reset());
-$('#sheet').addEventListener('close',()=>{if(!$('#sheet').open)window.LocationUI?.reset();});
+$('#sheet').addEventListener('cancel',()=>{sheetGeneration++;window.LocationUI?.reset();clearSheetOwner();});
+$('#sheet').addEventListener('close',()=>{if(!$('#sheet').open){window.LocationUI?.reset();clearSheetOwner();}});
 
 window.App={state:appState,api,escapeHtml,money,human,shortDate,icon,button,empty,sectionHeading,pageHeading,showSheet,closeSheet,toast,refresh,renderPage,renderShell,productById,createQuote,dataArray};
 async function handleHandoff(){if(appState.handoffHandled)return;const query=new URLSearchParams(location.search);if(!query.size)return;appState.handoffHandled=true;try{if(query.has('pairing'))await showPairing(query.get('pairing'));else if(query.has('checkout'))await reviewCheckout(query.get('checkout'));else if(query.has('research'))await window.ResearchUI.showBrief(query.get('research'));else if(query.has('product'))await createQuote(query.get('product'),undefined,query.get('quantity'));}catch(e){toast(e.message);}}

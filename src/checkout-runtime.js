@@ -29,7 +29,7 @@ export async function createCheckoutRuntime({auth,store,pool,provider,now=Date.n
  const {createCheckoutMerchant}=await import('./checkout-merchant.js');
  const merchant=config.merchant || createCheckoutMerchant({repository,now,providerAccountId:provider.accountId});
  let service=config.service;
- if(!service){const {createCheckoutService}=await import('./checkout-service.js');service=createCheckoutService({repository,merchant,provider,authAdapter,now});}
+ if(!service){const {createCheckoutService}=await import('./checkout-service.js');service=createCheckoutService({repository,merchant,provider,authAdapter,now,resolveCatalogReference:config.resolveCatalogReference});}
  let agent=config.agent;
  if(!agent){const {createCheckoutAgent}=await import('./checkout-agent.js');agent=(agentFactory || createCheckoutAgent)({service,repository,now,apiKey:process.env.GEMINI_API_KEY,model:process.env.GEMINI_CHECKOUT_MODEL || process.env.GEMINI_MODEL});}
  let verifiedDatabase=false,verifiedProvider=false,started=false,closed=false,pollTimer,polling=false,activePoll=null,lastMaintenance=-Infinity;

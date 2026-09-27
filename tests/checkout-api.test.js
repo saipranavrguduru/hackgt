@@ -89,3 +89,22 @@ test('logout and sample wallet hooks leave ordinary portal flows usable and revo
  await runtime.beforeLogout({headers:{}});await runtime.beforeLogout({headers:{cookie:'perkpilot_session=sample'}});await runtime.beforeWalletRemove({headers:{cookie:'perkpilot_session=sample'}},'sample-card');assert.equal(revocations,0);
  await runtime.beforeLogout({headers:{cookie:'perkpilot_session=registered'}});assert.equal(revocations,1);await runtime.close();
 });
+
+
+test('catalog import accepts only a server-issued reference and projects safe source metadata',()=>fixture(async({request,service,calls})=>{
+ service.importCatalogProduct=async(owner,body)=>{calls.push(['catalog',owner,body]);return{product:{sku:'explore-snapshot',name:'Observed headphones',sourceMerchantName:'Retailer',sourceUrl:'https://example.test/item',sourceLabel:'Sandbox copy of observed listing',observedAt:'2026-09-27T12:00:00Z',ownerSubjectKey:'private-owner',sessionDigest:'private-session'},destinations:[{id:'destination'}]};};
+ const reference='11111111-1111-4111-8111-111111111111';
+ const response=await request('/catalog-products','POST',{checkoutReference:reference});
+ assert.equal(response.status,201);assert.equal(response.data.product.name,'Observed headphones');assert.equal(response.data.product.sourceMerchantName,'Retailer');assert.equal(response.data.product.sourceUrl,'https://example.test/item');assert.equal(JSON.stringify(response.data).includes('private-'),false);
+ assert.equal(calls[0][1],principal);assert.deepEqual(calls[0][2],{checkoutReference:reference});
+ for(const body of [{checkoutReference:reference,priceCents:1},{checkoutReference:reference,merchantId:'real-retailer'},{checkoutReference:'not-a-reference'},{}])assert.equal((await request('/catalog-products','POST',body)).status,400);
+ assert.equal(calls.length,1);
+}));
+
+test('opening Explore products has a separate bounded browsing quota from purchase approvals',()=>fixture(async({request,service})=>{
+ service.importCatalogProduct=async()=>({product:{sku:'selected',variantId:'sandbox'},destinations:[]});
+ const selection={checkoutReference:'11111111-1111-4111-8111-111111111111'};
+ for(let i=0;i<20;i++)assert.equal((await request('/catalog-products','POST',selection)).status,201);
+ assert.equal((await request('/catalog-products','POST',selection)).status,429);
+ assert.equal((await request('/previews','POST',{sku:'selected',variantId:'sandbox',quantity:1,destinationId:'destination'})).status,201);
+}));

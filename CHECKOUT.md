@@ -4,7 +4,17 @@ Buy with PerkPilot authorizes one controlled-store purchase with a maximum total
 
 The controlled merchant is **PerkPilot Test Store**, not Nike, Alo, Amazon, or another external retailer. Stripe test transactions do not move money. The receipt's reward amount estimates a published base rate; it is not a posted benefit. Existing synthetic checkout remains separately labeled.
 
-Implementation and code review are complete. Sandbox integration acceptance is **pending**: successful unit/browser fixtures do not prove a real Stripe payment, real Gemini tool run, signed webhook delivery, interactive authentication, or PostgreSQL concurrency. See the [implementation plan](docs/superpowers/plans/2026-09-26-buy-with-perkpilot.md) and [approved specification](docs/superpowers/specs/2026-09-26-agent-checkout-design.md).
+A local run verified the core happy path with real Gemini tool calls, a Stripe-confirmed $104 sandbox payment using API test payment methods, and its signed webhook. Full sandbox acceptance remains **pending**, including manual browser enrollment/authentication and real PostgreSQL concurrency. The Explore regression uses isolated provider/model fixtures; those fixtures alone do not establish real provider behavior. See the [implementation plan](docs/superpowers/plans/2026-09-26-buy-with-perkpilot.md) and [approved specification](docs/superpowers/specs/2026-09-26-agent-checkout-design.md).
+
+## Buy from Explore
+
+Sign in with a registered portal account and search **Explore**. Open a product image, title, or **Buy with PerkPilot** button to see its product sheet. Eligible USD listings support the same saved-card enrollment, permission review, bounded agent purchase, and receipt as Test Store, without leaving Explore. Adding a wallet card returns you to the selected product.
+
+Explore checkout creates a **PerkPilot Test Store sandbox copy** of the observed listing. Its merchandise price comes from the server's catalog result, with **10% test tax and $5 test shipping**. These are sandbox fees, not the external retailer's charges; no external retailer order or delivery is created. The existing **$500 maximum total** still applies. Unsupported, missing-price, or over-limit listings show a reason and retain their retailer link.
+
+Product references expire after 15 minutes and are tied to the registered portal session. Refresh the search after expiry or a server restart. Once imported, the selected SKU and price snapshot remain stable for purchase approval and recovery. Closing the sheet does not cancel an approved purchase; reopening its product or Test Store recovers its status. An unresolved purchase prevents starting a different one.
+
+The isolated regression command is `npm run test:explore:browser`. Its catalog, Gemini transport, Stripe fields, and payment provider are test doubles; it verifies the integrated UI/server flow without spending external API quota. See the [Explore integration plan](docs/superpowers/plans/2026-09-27-explore-checkout.md).
 
 ## Configure an authorized test workspace
 

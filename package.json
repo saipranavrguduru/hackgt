@@ -19,6 +19,7 @@
     "test:checkout:browser": "node scripts/checkout-browser-smoke.js",
     "test:checkout:setup-browser": "node scripts/checkout-setup-browser-smoke.js",
     "test:cards:browser": "node scripts/card-wallet-browser-smoke.js",
+    "test:explore:browser": "node scripts/explore-checkout-browser-smoke.js",
     "build": "node scripts/check.js",
     "lint": "node scripts/check.js",
     "typecheck": "node scripts/check.js",
