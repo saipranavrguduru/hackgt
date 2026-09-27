@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const money = (cents) => Number.isSafeInteger(cents) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100) : 'Unknown';
-let portal = 'http://localhost:3000';
+let portal = location.protocol === 'https:' ? location.origin : 'http://localhost:3000';
+const portalLinks = [...document.querySelectorAll('a[href="http://localhost:3000"]')];
+for (const link of portalLinks) link.href = portal;
 let product;
 let quantity = 1;
 let cartState;
@@ -116,9 +118,11 @@ try {
   if (!response.ok) throw new Error(result.error?.message || 'The demo catalog is unavailable.');
   if (result.portalUrl) {
     const destination = new URL(result.portalUrl);
-    if (destination.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(destination.hostname) && !destination.username && !destination.password) portal = destination.origin;
+    const localDevelopment = destination.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(destination.hostname);
+    const hostedStorefront = destination.protocol === 'https:' && destination.origin === location.origin;
+    if ((localDevelopment || hostedStorefront) && !destination.username && !destination.password) portal = destination.origin;
   }
-  for (const link of document.querySelectorAll('a[href="http://localhost:3000"]')) link.href = portal;
+  for (const link of portalLinks) link.href = portal;
   const productId = new URLSearchParams(location.search).get('product') || 'alo-jacket';
   product = result.products.find((item) => item.id === productId && ['alo-jacket', 'nike-pegasus'].includes(item.id));
   if (!product) throw new Error('This product is not in the controlled demo catalog. Choose Alo or Nike above.');

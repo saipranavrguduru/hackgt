@@ -12,6 +12,7 @@
     "dev:demo": "node src/server.js",
     "dev:connected": "node src/connected-server.js",
     "start": "node scripts/start-integrated.js",
+    "start:hosted": "node scripts/start-hosted.js",
     "start:integrated": "node scripts/start-integrated.js",
     "start:connected": "node src/connected-server.js",
     "test": "node --test tests/*.test.js",

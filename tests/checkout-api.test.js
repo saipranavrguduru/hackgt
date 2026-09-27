@@ -64,9 +64,9 @@ test('runtime principal binding rejects samples, extension sessions and expired 
  store.data.users[0].sample=true;assert.throws(()=>runtime.resolvePrincipal(session),{code:'REGISTERED_USER_REQUIRED'});store.data.users[0].sample=false;
  session.expiresAt=999;assert.equal(runtime.authAdapter.isSessionActive(p),false);await runtime.close();
 });
-test('disabled checkout runtime needs no database or provider and rejects nonloopback enabled origins',async()=>{
+test('disabled checkout runtime needs no database or provider and rejects insecure public origins',async()=>{
  const {createCheckoutRuntime}=await import('../src/checkout-runtime.js');const disabled=await createCheckoutRuntime({config:{enabled:false}});assert.equal(disabled.capabilities().enabled,false);await disabled.start();await disabled.close();
- await assert.rejects(createCheckoutRuntime({config:{enabled:true,origin:'https://public.example'}}),{code:'INVALID_CHECKOUT_ORIGIN'});
+ await assert.rejects(createCheckoutRuntime({config:{enabled:true,origin:'http://public.example'}}),{code:'INVALID_CHECKOUT_ORIGIN'});
 });
 test('reload lists only service-owned intents and strips internal bindings from ordinary views',()=>fixture(async({request,service})=>{
  service.listIntents=async()=>[{id:'intent-1',state:'confirmed',sessionDigest:'secret',customerId:'cus_secret',clientSecret:'secret',order:{paymentId:'pi_public'}}];

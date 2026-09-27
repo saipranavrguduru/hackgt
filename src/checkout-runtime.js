@@ -1,26 +1,33 @@
 import {randomUUID} from 'node:crypto';
-import {fail,requireValue} from './errors.js';
+import {requireValue} from './errors.js';
 import {createCheckoutRoutes} from './checkout-routes.js';
+import {resolveCheckoutOrigin} from './checkout-origin.js';
 
 export async function createCheckoutRuntime({auth,store,pool,provider,now=Date.now,agentFactory,config={}}={}) {
  const enabled=config.enabled ?? process.env.PERKPILOT_CHECKOUT_ENABLED==='1';
  if(!enabled)return{routes:{handle:async()=>false,handleWebhook:async()=>false},capabilities:()=>({enabled:false,ready:false}),start:async()=>{},close:async()=>{},beforeLogout:async()=>{},beforeWalletRemove:async()=>{},listRewardPurchases:async()=>[]};
- const origin=config.origin || process.env.CHECKOUT_ORIGIN || `http://localhost:${process.env.PORT || 3000}`;
- let parsed;try{parsed=new URL(origin);}catch{fail('INVALID_CHECKOUT_ORIGIN','Configure a local checkout origin.',503);}
- requireValue(parsed.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(parsed.hostname) && parsed.origin===origin,'INVALID_CHECKOUT_ORIGIN','Checkout requires an exact loopback portal origin.',503);
+ const origin=resolveCheckoutOrigin({origin:config.origin});
  requireValue(auth?.data?.users && auth?.data?.sessions && store?.data?.users,'INVALID_CHECKOUT_AUTH','Portal identity stores are required.',503);
- function resolvePrincipal(sessionOrRequest) {
-  let session=sessionOrRequest;
-  if(sessionOrRequest?.headers){const token=sessionOrRequest.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('perkpilot_session='))?.slice('perkpilot_session='.length);session=auth.lookup(token);}
+ const readPortalSnapshot=typeof config.readPortalSnapshot==='function'?config.readPortalSnapshot:null;
+ const localSnapshot=()=>({auth:auth.data,state:store.data});
+ function principalFromSnapshot(session,snapshot) {
   requireValue(session?.kind==='portal' && typeof session.digest==='string' && session.expiresAt>now(),'REGISTERED_USER_REQUIRED','A registered portal session is required.',403);
-  const live=auth.data.sessions.find(value=>value.digest===session.digest && value.userId===session.userId && value.kind==='portal' && value.expiresAt>now());
-  const identity=auth.data.users.find(value=>value.id===session.userId),user=store.data.users.find(value=>value.id===session.userId);
+  const live=snapshot.auth.sessions.find(value=>value.digest===session.digest && value.userId===session.userId && value.kind==='portal' && value.expiresAt>now());
+  const identity=snapshot.auth.users.find(value=>value.id===session.userId),user=snapshot.state.users.find(value=>value.id===session.userId);
   requireValue(live && identity && user && user.sample!==true && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id),'REGISTERED_USER_REQUIRED','A registered portal session is required.',403);
   return{subjectKey:'portal:'+user.id,userId:user.id,sessionDigest:session.digest};
  }
- function isSessionActive(principal){try{const session=auth.data.sessions.find(value=>value.digest===principal?.sessionDigest);const current=resolvePrincipal(session);return current.subjectKey===principal.subjectKey&&current.userId===principal.userId;}catch{return false;}}
- function getWalletCards(principal){requireValue(isSessionActive(principal),'REGISTERED_USER_REQUIRED','The authorizing session is no longer active.',403);return(store.data.cards||[]).filter(card=>card.userId===principal.userId);}
- const authAdapter={resolvePrincipal,isSessionActive,getWalletCards,isActive:isSessionActive,listWalletCards:getWalletCards,getWalletCard:(principal,id)=>getWalletCards(principal).find(card=>card.id===id)};
+ function resolvePrincipal(sessionOrRequest) {
+  let session=sessionOrRequest;
+  if(sessionOrRequest?.headers){const token=sessionOrRequest.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('perkpilot_session='))?.slice('perkpilot_session='.length);session=auth.lookup(token);}
+  return principalFromSnapshot(session,localSnapshot());
+ }
+ function activeInSnapshot(principal,snapshot){try{const session=snapshot.auth.sessions.find(value=>value.digest===principal?.sessionDigest);const current=principalFromSnapshot(session,snapshot);return current.subjectKey===principal.subjectKey&&current.userId===principal.userId;}catch{return false;}}
+ function isSessionActive(principal){return readPortalSnapshot?Promise.resolve().then(readPortalSnapshot).then(snapshot=>activeInSnapshot(principal,snapshot),()=>false):activeInSnapshot(principal,localSnapshot());}
+ function walletFromSnapshot(principal,snapshot){requireValue(activeInSnapshot(principal,snapshot),'REGISTERED_USER_REQUIRED','The authorizing session is no longer active.',403);return(snapshot.state.cards||[]).filter(card=>card.userId===principal.userId);}
+ function getWalletCards(principal){return readPortalSnapshot?Promise.resolve().then(readPortalSnapshot).then(snapshot=>walletFromSnapshot(principal,snapshot)):walletFromSnapshot(principal,localSnapshot());}
+ function getWalletCard(principal,id){const cards=getWalletCards(principal);return readPortalSnapshot?cards.then(rows=>rows.find(card=>card.id===id)):cards.find(card=>card.id===id);}
+ const authAdapter={resolvePrincipal,isSessionActive,getWalletCards,isActive:isSessionActive,listWalletCards:getWalletCards,getWalletCard};
  let ownedDatabase=null;
  if(!pool&&!config.repository){const {createDatabase}=await import('./connected-db.js');ownedDatabase=createDatabase(config.databaseUrl);pool=ownedDatabase.pool;}
  const {createCheckoutRepository,CHECKOUT_SCHEMA_VERSION}=await import('./checkout-repository.js');
@@ -48,7 +55,7 @@ export async function createCheckoutRuntime({auth,store,pool,provider,now=Date.n
  }
  async function runIntent(intent) {
   const digest=intent.sessionDigest || intent.permission?.sessionDigest;
-  let principal;try{principal=resolvePrincipal(auth.data.sessions.find(session=>session.digest===digest));}catch{await finishUndispatched(intent.id,'cancelled','PERMISSION_REVOKED');return;}
+  let principal;try{const snapshot=readPortalSnapshot?await readPortalSnapshot():localSnapshot();principal=principalFromSnapshot(snapshot.auth.sessions.find(session=>session.digest===digest),snapshot);}catch{await finishUndispatched(intent.id,'cancelled','PERMISSION_REVOKED');return;}
   if(now()>=intent.expiresAt){await finishUndispatched(intent.id,'expired','PERMISSION_EXPIRED');return;}
   const claimed=await repository.claimRun(intent.id,workerId);if(!claimed)return;
   const controller=new AbortController();controllers.add(controller);

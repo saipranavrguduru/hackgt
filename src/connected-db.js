@@ -1,10 +1,21 @@
 import pg from 'pg';
 
 const { Pool } = pg;
-export function createDatabase(url = process.env.DATABASE_URL, injectedPool = null) {
+export function createDatabase(url = process.env.DATABASE_URL, injectedPool = null, {schema = process.env.PERKPILOT_DATABASE_SCHEMA} = {}) {
   if (!url && !injectedPool) throw new Error('DATABASE_URL is required for connected mode.');
-  const pool = injectedPool || new Pool({ connectionString: url, max: 5, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000 });
+  if (schema !== undefined && schema !== '' && (typeof schema !== 'string' || !/^[a-z_][a-z0-9_]{0,62}$/.test(schema)))
+    throw Object.assign(new Error('Database schema must be a lowercase PostgreSQL identifier of at most 63 characters.'), {code:'INVALID_DATABASE_SCHEMA'});
+  const connectionOptions = schema ? `-c search_path=${schema}` : undefined;
+  // pg lets URL options override Pool options. Pin both when the URL includes
+  // options so a configured hosted namespace can never fall back to public.
+  let connectionString = url;
+  if (schema && !injectedPool) {
+    const parsed = new URL(url);
+    if (parsed.searchParams.has('options')) { parsed.searchParams.set('options', connectionOptions); connectionString = parsed.toString(); }
+  }
+  const pool = injectedPool || new Pool({ connectionString, max: 5, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000, ...(schema ? {options:connectionOptions} : {}) });
   const query = (sql, params = []) => pool.query(sql, params);
+  const initializeSchema = async () => { if (schema) await query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`); };
   async function transaction(fn) {
     const client=await pool.connect();
     try{await client.query('BEGIN');const result=await fn({query:(sql,params=[])=>client.query(sql,params)});await client.query('COMMIT');return result;}
@@ -12,6 +23,7 @@ export function createDatabase(url = process.env.DATABASE_URL, injectedPool = nu
     finally{client.release();}
   }
   async function migrate() {
+    await initializeSchema();
     await query(`CREATE TABLE IF NOT EXISTS connected_users (
       id uuid PRIMARY KEY, email text NOT NULL UNIQUE, name text NOT NULL,
       password_salt text NOT NULL, password_hash text NOT NULL,
@@ -68,5 +80,5 @@ export function createDatabase(url = process.env.DATABASE_URL, injectedPool = nu
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   }
-  return { pool, query, transaction, migrate, saveSync, close: () => pool.end() };
+  return { pool, query, transaction, initializeSchema, migrate, saveSync, close: () => pool.end() };
 }

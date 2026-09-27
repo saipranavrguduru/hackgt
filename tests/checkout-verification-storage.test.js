@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {newDb} from 'pg-mem';
+import {StateStore} from '../src/state.js';
+import {AuthStore} from '../src/auth.js';
+import {createPortalPersistence} from '../src/portal-persistence.js';
+import {createCheckoutRepository} from '../src/checkout-repository.js';
+import {collectCheckoutVerification} from '../scripts/verify-checkout.js';
+
+test('hosted verifier reads PostgreSQL identity without local files, initialization, or provider calls',async t=>{
+  const {Pool}=newDb().adapters.createPg(),pool=new Pool();t.after(()=>pool.end());
+  const emptyDirectory=await mkdtemp(join(tmpdir(),'perkpilot-no-local-identity-'));t.after(()=>rm(emptyDirectory,{recursive:true,force:true}));
+  const store=new StateStore(null),auth=new AuthStore(null);
+  const persistence=createPortalPersistence({pool,store,auth});await persistence.initialize();
+  const user=await persistence.run(()=>{const account=auth.register({name:'Hosted buyer',email:'hosted@example.test',password:'hosted-test-password'});store.data.users.push({...account,sample:false});return account;});
+  const checkout=createCheckoutRepository({pool});await checkout.migrate();
+  const before=(await pool.query('SELECT snapshot FROM pp_portal_snapshots WHERE key=$1',['default'])).rows[0].snapshot;
+  const statements=[];
+  const repository={query:(sql,params)=>{statements.push(sql);return checkout.query(sql,params);}};
+  const env={PERKPILOT_PORTAL_STORAGE:'postgres',PERKPILOT_DATA_DIR:emptyDirectory,PERKPILOT_CHECKOUT_ENABLED:'1',PUBLIC_ORIGIN:'https://perkpilot.example',DATABASE_URL:'postgresql://fixture@localhost/fixture',STRIPE_SECRET_KEY:'sk_test_fixture',STRIPE_PUBLISHABLE_KEY:'pk_test_fixture',STRIPE_EXPECTED_ACCOUNT_ID:'acct_fixture',STRIPE_WEBHOOK_SECRET:'whsec_fixture',GEMINI_API_KEY:'fixture',CHECKOUT_VERIFY_SUBJECT:'portal:'+user.id};
+  let providerCalls=0;
+  const options={env,repository,provider:{verifyAccount:async()=>{providerCalls++;throw new Error('No enrolled subject should reach Stripe.');}},fetchImpl:async()=>assert.fail('No model request should be made.')};
+  const report=await collectCheckoutVerification(options);
+  assert.equal(report.checks.portalIdentity.status,'verified');assert.equal(report.checks.portalIdentity.subjectKey,'portal:'+user.id);
+  assert.equal(report.checks.database.code,'ENROLLED_TEST_SUBJECT_REQUIRED');assert.equal(report.checks.providerAccount.status,'not-run');assert.equal(providerCalls,0);
+  assert.ok(statements.length>0);assert.ok(statements.every(sql=>/^SELECT\b/i.test(sql.trim())));
+  assert.deepEqual((await pool.query('SELECT snapshot FROM pp_portal_snapshots WHERE key=$1',['default'])).rows[0].snapshot,before);
+  await pool.query('UPDATE pp_portal_snapshots SET snapshot=$1 WHERE key=$2',[{...before,version:2},'default']);
+  const unsupported=await collectCheckoutVerification(options);
+  assert.equal(unsupported.checks.portalIdentity.status,'not-run');assert.equal(unsupported.checks.database.code,'CHECKOUT_IDENTITY_OR_DATABASE_UNAVAILABLE');assert.equal(providerCalls,0);
+});

@@ -1,13 +1,24 @@
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {resolveCheckoutOrigin} from '../src/checkout-origin.js';
 
 const tools=new Set(['read_cart','rank_cards','execute_purchase','get_order_status']);
 const validSubject=value=>typeof value==='string' && /^portal:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const checkNames=['configuration','portalIdentity','database','providerAccount','modelCapability','modelTools','successfulOrder','blockedAmount','signedWebhook','decline','challenge','replay','timeoutRecovery','postgresConcurrency'];
 
-async function registeredIdentity(env) {
-  const dir=resolve(env.CHECKOUT_VERIFY_DATA_DIR || 'data');
+async function registeredIdentity(env,repository) {
+  if(env.PERKPILOT_PORTAL_STORAGE==='postgres'){
+    let database;
+    try{
+      if(!repository){const {createDatabase}=await import('../src/connected-db.js');database=createDatabase(env.DATABASE_URL);}
+      const result=await (repository || database).query('SELECT snapshot FROM pp_portal_snapshots WHERE key=$1',['default']);
+      const snapshot=result.rows[0]?.snapshot;
+      if(snapshot?.version!==1 || !Array.isArray(snapshot.auth?.users) || !Array.isArray(snapshot.state?.users))throw new Error('Stored portal identity is unavailable or incompatible.');
+      return {auth:snapshot.auth,state:snapshot.state};
+    }finally{if(database)await database.close();}
+  }
+  const dir=resolve(env.CHECKOUT_VERIFY_DATA_DIR || env.PERKPILOT_DATA_DIR || 'data');
   const [auth,state]=await Promise.all(['auth.json','state.json'].map(file=>readFile(resolve(dir,file),'utf8').then(JSON.parse)));
   return {auth,state};
 }
@@ -19,14 +30,13 @@ export async function collectCheckoutVerification({env=process.env,repository,pr
   const missing=[];
   for(const name of ['DATABASE_URL','STRIPE_SECRET_KEY','STRIPE_PUBLISHABLE_KEY','STRIPE_EXPECTED_ACCOUNT_ID','STRIPE_WEBHOOK_SECRET','GEMINI_API_KEY','CHECKOUT_VERIFY_SUBJECT'])if(!env[name])missing.push(name);
   if(env.PERKPILOT_CHECKOUT_ENABLED!=='1')missing.push('PERKPILOT_CHECKOUT_ENABLED=1');
-  let origin;try{origin=new URL(env.CHECKOUT_ORIGIN || `http://localhost:${env.PORT || 3000}`);}catch{}
-  const safeOrigin=origin?.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(origin.hostname) && origin.origin===(env.CHECKOUT_ORIGIN || `http://localhost:${env.PORT || 3000}`);
-  const invalid=(!safeOrigin || env.STRIPE_SECRET_KEY && !env.STRIPE_SECRET_KEY.startsWith('sk_test_') || env.STRIPE_PUBLISHABLE_KEY && !env.STRIPE_PUBLISHABLE_KEY.startsWith('pk_test_') || env.STRIPE_EXPECTED_ACCOUNT_ID && !/^acct_[A-Za-z0-9_]+$/.test(env.STRIPE_EXPECTED_ACCOUNT_ID) || env.CHECKOUT_VERIFY_SUBJECT && !validSubject(env.CHECKOUT_VERIFY_SUBJECT));
+  let origin;try{origin=resolveCheckoutOrigin({env});}catch{}
+  const invalid=(!origin || env.STRIPE_SECRET_KEY && !env.STRIPE_SECRET_KEY.startsWith('sk_test_') || env.STRIPE_PUBLISHABLE_KEY && !env.STRIPE_PUBLISHABLE_KEY.startsWith('pk_test_') || env.STRIPE_EXPECTED_ACCOUNT_ID && !/^acct_[A-Za-z0-9_]+$/.test(env.STRIPE_EXPECTED_ACCOUNT_ID) || env.CHECKOUT_VERIFY_SUBJECT && !validSubject(env.CHECKOUT_VERIFY_SUBJECT));
   if(missing.length || invalid){report.checks.configuration={status:'blocked',code:invalid?'INVALID_TEST_CONFIGURATION':'CHECKOUT_CONFIGURATION_INCOMPLETE',missing};return report;}
-  report.checks.configuration={status:'configured',checkoutOrigin:origin.origin};
+  report.checks.configuration={status:'configured',checkoutOrigin:origin};
   let database;
   try {
-    identity=identity || await registeredIdentity(env);
+    identity=identity || await registeredIdentity(env,repository);
     const userId=env.CHECKOUT_VERIFY_SUBJECT.slice('portal:'.length);
     if(!identity.auth?.users?.some(user=>user.id===userId) || !identity.state?.users?.some(user=>user.id===userId && user.sample!==true)){
       report.checks.portalIdentity={status:'blocked',code:'REGISTERED_TEST_SUBJECT_REQUIRED'};return report;
@@ -75,7 +85,7 @@ export async function collectCheckoutVerification({env=process.env,repository,pr
     report.checks.blockedAmount=blocked?{status:'verified',intentId:blocked.intent.id,maxAmountCents:blocked.intent.max_amount_cents,dispatchRecords:0,enforcement:'PerkPilot blocked submission before Stripe'}:{status:'not-verified'};
     const received=(await repository.query('SELECT data FROM pp_checkout_events WHERE provider_account_id=$1 AND environment=$2 AND state=$3',[env.STRIPE_EXPECTED_ACCOUNT_ID,'test','processed'])).rows.map(row=>row.data);
     const delivered=success && received.some(event=>event.paymentId===success.payment.id);
-    report.checks.signedWebhook={status:delivered?'observed':'not-verified',source:'Processed events from signed webhook ingestion; confirm local forwarding during the walkthrough.'};
+    report.checks.signedWebhook={status:delivered?'observed':'not-verified',source:'Processed events from signed webhook ingestion; confirm endpoint delivery during the walkthrough.'};
     const declined=verified.find(row=>row.intent.state==='payment_failed' && row.payment.status==='requires_payment_method' && row.payment.code==='PAYMENT_DECLINED');
     report.checks.decline=declined?{status:'verified',paymentId:declined.payment.id,state:'payment_failed'}:{status:'not-verified'};
     report.checks.challenge={status:'interactive-check-required',detail:'Complete a documented test authentication challenge in the actual Stripe browser fields and confirm the resulting payment. A mocked challenge is not provider evidence.'};

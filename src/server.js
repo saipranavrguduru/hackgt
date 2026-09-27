@@ -33,7 +33,7 @@ async function readBody(req) {
 export function createApplication(options = {}) {
   const mode = options.mode || process.env.PERKPILOT_MODE || 'demo';
   const persist = options.persist !== false;
-  const dir = options.dataDir || join(root,'data');
+  const dir = options.dataDir || process.env.PERKPILOT_DATA_DIR || join(root,'data');
   const store = new StateStore(persist ? join(dir,'state.json') : null);
   const auth = new AuthStore(persist ? join(dir,'auth.json') : null);
   let checkoutRuntime = options.checkoutRuntime || null;
@@ -47,7 +47,9 @@ export function createApplication(options = {}) {
   const nearbyPlaces = createNearbyPlacesService({fetchImpl:options.locationFetch || fetch});
   const portalPort = Number(options.port ?? process.env.PORT ?? 3000);
   const storePort = Number(options.storePort ?? process.env.STORE_PORT ?? 3001);
-  const allowedHost = options.origin ? new URL(options.origin).host : null;
+  const configuredOrigin = options.origin ? new URL(options.origin) : null;
+  const allowedHost = configuredOrigin?.host;
+  const hostedOrigin = configuredOrigin?.protocol === 'https:' ? configuredOrigin.origin : null;
   const scoped = (key,userId) => (store.data[key] || []).filter(row => row.userId === userId);
   const summary = async (userId,req) => {
     let checkoutPurchases=[],checkoutRewardsUnavailable=false;
@@ -66,8 +68,8 @@ export function createApplication(options = {}) {
     });
     return {offers:visible,suppressed};
   };
-  const cookie = (res,token,req) => res.setHeader('Set-Cookie',`perkpilot_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token?43200:0}${req.socket.encrypted?'; Secure':''}`);
-  const portalUrl = req => `http://${req.headers.host?.startsWith('127.0.0.1')?'127.0.0.1':'localhost'}:${req.socket.localPort === storePort ? portalPort : req.socket.localPort}`;
+  const cookie = (res,token,req) => res.setHeader('Set-Cookie',`perkpilot_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token?43200:0}${hostedOrigin || req.socket.encrypted?'; Secure':''}`);
+  const portalUrl = req => hostedOrigin || `http://${req.headers.host?.startsWith('127.0.0.1')?'127.0.0.1':'localhost'}:${req.socket.localPort === storePort ? portalPort : req.socket.localPort}`;
 
   function validateCurrentQuote(quote,userId) {
     requireValue(quote && quote.userId===userId,'NOT_FOUND','Quote not found.',404);
@@ -140,7 +142,7 @@ export function createApplication(options = {}) {
       const body = ['POST','PATCH','DELETE'].includes(method) ? await readBody(req) : {};
       const state = store.data;
       if(session?.kind==='extension' && path.startsWith('/auth/')) fail('SCOPE_FORBIDDEN','This connection cannot access account identity.',403);
-      if(path==='/store/products' && method==='GET') return send({products:state.products.filter(p=>['alo','nike'].includes(p.merchantId)),mode,portalUrl:`http://localhost:${portalPort}`});
+      if(path==='/store/products' && method==='GET') return send({products:state.products.filter(p=>['alo','nike'].includes(p.merchantId)),mode,portalUrl:hostedOrigin || `http://localhost:${portalPort}`});
       const cartSnapshot=record=>{
         const product=state.products.find(p=>p.id===record.productId);
         return {id:record.id,revision:record.revision,expiresAt:record.expiresAt,cart:{productId:product.id,quantity:record.quantity,merchandiseCents:product.priceCents*record.quantity,shippingCents:product.shippingCents,taxCents:product.taxCents,currency:product.currency,version:product.version}};
@@ -223,7 +225,7 @@ export function createApplication(options = {}) {
       }
       if(path==='/bootstrap' && method==='GET') {
         const ranked=feed(userId);
-        return send({user:cleanUser(user),profile:domain.getProfile(state,userId),...ranked,notifications:scoped('notifications',userId),cards:scoped('cards',userId),cardProducts:cardProducts(),accounts:scoped('accounts',userId),transactions:scoped('transactions',userId),products:state.products,merchants:state.merchants,missions:scoped('missions',userId),watches:scoped('watches',userId),purchases:scoped('purchases',userId),savings:await summary(userId,req),mode,now:state.now || state.clock,storeUrl:`http://localhost:${storePort}`,finance:domain.financeSummary(state,userId)});
+        return send({user:cleanUser(user),profile:domain.getProfile(state,userId),...ranked,notifications:scoped('notifications',userId),cards:scoped('cards',userId),cardProducts:cardProducts(),accounts:scoped('accounts',userId),transactions:scoped('transactions',userId),products:state.products,merchants:state.merchants,missions:scoped('missions',userId),watches:scoped('watches',userId),purchases:scoped('purchases',userId),savings:await summary(userId,req),mode,now:state.now || state.clock,storeUrl:hostedOrigin || `http://localhost:${storePort}`,finance:domain.financeSummary(state,userId)});
       }
       if(path==='/profile' && method==='GET') return send(domain.getProfile(state,userId));
       if(path==='/profile/regenerate' && method==='POST') return send(domain.getProfile(state,userId));
@@ -335,7 +337,7 @@ export function createApplication(options = {}) {
           requireValue(user.sample && !card.selfReported,'PAYMENT_UNAVAILABLE','Payment provider unavailable.',409);
           const outcome=body.outcome || 'approved'; requireValue(['approved','success','declined','processing'].includes(outcome),'INVALID_OUTCOME','Choose a supported demo outcome.');
           record.providerAttempts=1;
-          if(outcome==='declined') { record.status='declined'; return send({session:record,error:{code:'PAYMENT_DECLINED',message:'Demo payment declined. No charge or purchase was made.'}},402); }
+          if(outcome==='declined') { record.status='declined'; res.commitErrorResponse=true; return send({session:record,error:{code:'PAYMENT_DECLINED',message:'Demo payment declined. No charge or purchase was made.'}},402); }
           const purchase={id:randomUUID(),userId,quoteId:quote.id,cardId:record.cardId,productId:quote.cart.productId,productName:quote.cart.productName,merchantId:quote.cart.merchantId,merchantName:quote.cart.merchantName,checkoutCents:quote.cart.checkoutCents,status:outcome==='processing'?'processing':'authorized',createdAt:state.now || state.clock,plan:quote.plans.find(p=>p.cardId===record.cardId),synthetic:true};
           state.purchases.push(purchase); record.purchaseId=purchase.id; record.status=purchase.status; return send({purchase,session:record});
         }

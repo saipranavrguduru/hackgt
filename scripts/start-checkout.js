@@ -1,20 +1,22 @@
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {resolveCheckoutOrigin} from '../src/checkout-origin.js';
 
 export async function startCheckoutApplication(options={}) {
  const {createIntegratedApplication}=await import('../src/integrated-server.js');
  const {createCheckoutRuntime}=await import('../src/checkout-runtime.js');
- const localOrigin=options.checkoutOptions?.config?.origin || process.env.CHECKOUT_ORIGIN || `http://localhost:${options.port ?? process.env.PORT ?? 3000}`;
- const app=createIntegratedApplication({...options,origin:localOrigin});
+ const origin=resolveCheckoutOrigin({origin:options.checkoutOptions?.config?.origin,port:options.port});
+ const host=['localhost','127.0.0.1','[::1]'].includes(new URL(origin).hostname)?'127.0.0.1':'0.0.0.0';
+ const app=createIntegratedApplication({...options,origin});
  let checkout;
  const closeServer=server=>new Promise(resolveClose=>server.listening?server.close(resolveClose):resolveClose());
  const close=async()=>{await checkout?.close();await Promise.all([closeServer(app.server),closeServer(app.merchant)]);await app.close();};
  try {
   await app.migrate();
-  checkout=await createCheckoutRuntime({auth:app.demo.auth,store:app.demo.store,...options.checkoutOptions,config:{origin:localOrigin,resolveCatalogReference:app.connected.resolveCatalogReference,...options.checkoutOptions?.config}});
+  checkout=await createCheckoutRuntime({auth:app.demo.auth,store:app.demo.store,...options.checkoutOptions,config:{origin,resolveCatalogReference:app.connected.resolveCatalogReference,...(app.portalPersistence?{readPortalSnapshot:()=>app.portalPersistence.readSnapshot()}:{}),...options.checkoutOptions?.config}});
   if(checkout.capabilities().enabled)app.demo.setCheckoutRuntime(checkout);
   await checkout.start();
-  await new Promise((resolveListen,reject)=>{app.server.once('error',reject);app.server.listen(app.port,'127.0.0.1',resolveListen);});
+  await new Promise((resolveListen,reject)=>{app.server.once('error',reject);app.server.listen(app.port,host,resolveListen);});
   await new Promise((resolveListen,reject)=>{app.merchant.once('error',reject);app.merchant.listen(app.storePort,'127.0.0.1',resolveListen);});
   console.log(`PerkPilot: ${app.origin} (checkout ${checkout.capabilities().enabled?'enabled':'disabled'})`);
   let shuttingDown=false;

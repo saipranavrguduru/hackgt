@@ -3,16 +3,20 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApplication } from './server.js';
 import { createConnectedApplication } from './connected-server.js';
+import { createPortalPersistence } from './portal-persistence.js';
+import { withPortalPersistence } from './portal-persistence-http.js';
 
 const localHost = value => ['localhost', '127.0.0.1', '::1'].includes(value);
 
 export function createIntegratedApplication(options = {}) {
   const port = Number(options.port ?? process.env.PORT ?? 3000);
   const storePort = Number(options.storePort ?? process.env.STORE_PORT ?? 3001);
-  const configuredOrigin = options.origin || process.env.PUBLIC_ORIGIN;
+  const configuredOrigin = options.origin || process.env.PUBLIC_ORIGIN || process.env.RENDER_EXTERNAL_URL;
   const parsed = configuredOrigin ? new URL(configuredOrigin) : null;
   const origin = parsed && !localHost(parsed.hostname) ? parsed.origin : `http://localhost:${port}`;
-  const demo = createApplication({ ...(options.demoOptions || {}), port, storePort, origin });
+  const portalStorage = options.portalStorage || process.env.PERKPILOT_PORTAL_STORAGE || 'file';
+  if (!['file','postgres'].includes(portalStorage)) throw new Error('Invalid portal storage configuration.');
+  const demo = createApplication({ ...(options.demoOptions || {}), ...(portalStorage==='postgres'?{persist:false}:{}), port, storePort, origin });
   // Identity comes only from the portal's verified cookie, never client-supplied
   // headers, email matching, bearer tokens, or a previous connected session.
   const portalIdentity = req => {
@@ -24,20 +28,26 @@ export function createIntegratedApplication(options = {}) {
     return { id:user.id, name:user.name, email:user.email, sessionDigest:session.digest };
   };
   const connected = createConnectedApplication({ ...(options.connectedOptions || {}), origin, portalIdentity });
-  const handler = (req, res) => {
-    const connectedRoute = req.url === '/api' || req.url?.startsWith('/api/');
-    const demoRoute = req.url === '/api/v1' || req.url?.startsWith('/api/v1/');
+  const portalPersistence = portalStorage==='postgres' ? createPortalPersistence({pool:connected.db.pool,store:demo.store,auth:demo.auth}) : null;
+  const route = (req, res) => {
+    let pathname;
+    try{pathname=new URL(req.url,origin).pathname;}
+    catch{res.writeHead(400,{'Content-Type':'application/json'});res.end('{"error":{"code":"INVALID_URL","message":"Invalid request URL."}}');return;}
+    const connectedRoute = pathname === '/api' || pathname.startsWith('/api/');
+    const demoRoute = pathname === '/api/v1' || pathname.startsWith('/api/v1/');
     return connectedRoute && !demoRoute ? connected.handler(req, res) : demo.handler(req, res);
   };
+  const handler = portalPersistence ? withPortalPersistence(portalPersistence,route) : route;
   return {
     server:createServer(handler),
-    merchant:demo.createStoreServer(),
+    merchant:portalPersistence ? createServer(withPortalPersistence(portalPersistence,demo.handler)) : demo.createStoreServer(),
     demo,
     connected,
+    portalPersistence,
     origin,
     port,
     storePort,
-    migrate:()=>connected.migrate(),
+    migrate:async()=>{await connected.migrate();await portalPersistence?.initialize();},
     close:async()=>{ demo.store.save(); await connected.db.close(); }
   };
 }

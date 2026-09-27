@@ -1,20 +1,39 @@
+# Free web service reusing an existing PostgreSQL database. No paid resources.
+# RENDER_EXTERNAL_URL supplies the HTTPS origin; do not copy local origin values.
 services:
   - type: web
-    name: perkpilot-connected
+    name: perkpilot
     runtime: node
-    region: virginia
-    plan: 0.5c-512mb
+    region: oregon
+    plan: free
     buildCommand: npm ci && npm run build
-    startCommand: npm run start:integrated
+    startCommand: npm run start:hosted
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 24.8.0
+      - key: PERKPILOT_MODE
+        value: demo
+      - key: PERKPILOT_PORTAL_STORAGE
+        value: postgres
+      - key: PERKPILOT_DATABASE_SCHEMA
+        value: perkpilot_hosted
+      - key: PERKPILOT_CHECKOUT_ENABLED
+        value: "0"
+      - key: PERKPILOT_CHECKOUT_DEMO_CONTROLS
+        value: "0"
+      # Enable checkout after adding the allocated URL's STRIPE_WEBHOOK_SECRET.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_EXPECTED_ACCOUNT_ID
+        sync: false
+      - key: GEMINI_CHECKOUT_MODEL
+        value: gemini-3.7-flash
       - key: DATABASE_URL
-        fromDatabase:
-          name: perkpilot-connected-db
-          property: connectionString
-      - key: PUBLIC_ORIGIN
         sync: false
       - key: PLAID_ENV
         value: sandbox
@@ -36,8 +55,3 @@ services:
         value: us
       - key: SERPAPI_HL
         value: en
-databases:
-  - name: perkpilot-connected-db
-    plan: 0.1c-256mb
-    region: virginia
-    ipAllowList: []

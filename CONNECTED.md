@@ -41,7 +41,7 @@ If you only have Plaid credentials so far, run `npm run verify:plaid`. It checks
 
 ## Deploy
 
-`render.yaml` defines a Render web service and a private PostgreSQL instance. Create a Blueprint from this repository, enter the `sync:false` secrets in Render, including a 32-byte base64 encryption key, and set `PUBLIC_ORIGIN` to the final `https://...onrender.com` URL or custom domain. Render's proxy terminates HTTPS; the Node server binds to `0.0.0.0:$PORT`. The defined compute/database plans may incur charges; review them in Render before creating resources. The health endpoint is `/api/health` and probes the database.
+`render.yaml` defines a free Render web service that reuses an existing PostgreSQL database. [DEPLOYMENT.md](DEPLOYMENT.md) covers credentials, durable portal storage, HTTPS origins, and enabling the Stripe sandbox webhook. Render's proxy terminates HTTPS; `npm run start:hosted` binds to `0.0.0.0:$PORT`. The health endpoint is `/api/health` and probes the database. The Blueprint creates no paid resources.
 
 Do not invite real users until you have a privacy policy, data-retention policy, account-recovery flow, email verification, backup/restore rehearsal, provider-access approval, and security review. The implementation has origin checks, session controls, limited login attempts, encrypted Plaid tokens, a narrow CSP, and user-scoped database reads, but those controls alone are not a production financial-data program.
 

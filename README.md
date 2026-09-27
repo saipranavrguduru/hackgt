@@ -91,6 +91,8 @@ This preserves registered profiles and their records. Do not run multiple applic
 
 `.env.example` documents configuration. `npm run dev` and `npm start` load a local gitignored `.env` when present; deployed environments use their secret manager. Gemini powers the Explore research assistant when configured. The synthetic demo assistant keeps its bounded deterministic behavior unless its optional model provider is configured. Research assistants have no purchase tools. The separate checkout agent's narrow tools operate only within an already approved purchase permission; raw account/card/session credentials are never passed to a model.
 
+For free Render hosting with durable accounts, wallets, rewards, and sandbox checkout, use [DEPLOYMENT.md](DEPLOYMENT.md) and `npm run start:hosted`. The Blueprint reuses an existing PostgreSQL database and provisions no paid resources.
+
 See [CONTRACTS.md](CONTRACTS.md) for API boundaries, [CONNECTED.md](CONNECTED.md) for the implemented provider layer, and [LIVE_INTEGRATION.md](LIVE_INTEGRATION.md) for remaining production integrations. The original design's statements about an earlier repository are requirements context; this README and current test output describe this implementation.
 
 ## Troubleshooting

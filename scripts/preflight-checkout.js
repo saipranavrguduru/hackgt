@@ -1,5 +1,6 @@
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {resolveCheckoutOrigin} from '../src/checkout-origin.js';
 
 export async function preflightCheckout({env=process.env,verifyProvider=false}={}) {
  const missing=[];
@@ -7,8 +8,7 @@ export async function preflightCheckout({env=process.env,verifyProvider=false}={
  for(const key of ['DATABASE_URL','STRIPE_SECRET_KEY','STRIPE_PUBLISHABLE_KEY','STRIPE_WEBHOOK_SECRET','STRIPE_EXPECTED_ACCOUNT_ID','GEMINI_API_KEY'])if(!env[key])missing.push(key);
  if(env.STRIPE_SECRET_KEY&&!env.STRIPE_SECRET_KEY.startsWith('sk_test_'))missing.push('Stripe test secret key');
  if(env.STRIPE_PUBLISHABLE_KEY&&!env.STRIPE_PUBLISHABLE_KEY.startsWith('pk_test_'))missing.push('Stripe test publishable key');
- const origin=env.CHECKOUT_ORIGIN || `http://localhost:${env.PORT || 3000}`;
- try{const url=new URL(origin);if(url.protocol!=='http:' || !['localhost','127.0.0.1','[::1]'].includes(url.hostname) || url.origin!==origin)missing.push('loopback CHECKOUT_ORIGIN');}catch{missing.push('valid CHECKOUT_ORIGIN');}
+ try{resolveCheckoutOrigin({env});}catch{missing.push('valid HTTPS or loopback HTTP checkout origin');}
  if(missing.length)return{ready:false,missing,database:'unchecked',provider:'unchecked',modelTools:'unverified',webhookDelivery:'unverified'};
  const {createDatabase}=await import('../src/connected-db.js');const database=createDatabase(env.DATABASE_URL);
  try {
