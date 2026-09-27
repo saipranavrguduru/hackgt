@@ -85,8 +85,8 @@ function renderProduct() {
   $('jacket-art').hidden = nike;
   $('shoe-art').hidden = !nike;
   $('product-visual').classList.toggle('nike', nike);
-  $('collection-label').textContent = nike ? 'MADE FOR YOUR NEXT MILE' : 'THE EVERYDAY COLLECTION';
-  $('product-category').textContent = nike ? 'RUNNING · EVERYDAY COMFORT' : 'OUTERWEAR · EVERYDAY MOVEMENT';
+  $('collection-label').textContent = nike ? 'Made for your next mile' : 'The everyday collection';
+  $('product-category').textContent = nike ? 'Running · everyday comfort' : 'Outerwear · everyday movement';
   $('visual-caption').replaceChildren(...(nike ? ['Find your rhythm.', 'One mile at a time.'] : ['Considered design.', 'Everyday movement.']).flatMap((line, i) => i ? [document.createElement('br'), document.createTextNode(line)] : [document.createTextNode(line)]));
   const color = product.attributes?.color || (nike ? 'white' : 'sand');
   $('color-name').textContent = color[0].toUpperCase() + color.slice(1);

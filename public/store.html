@@ -6,17 +6,18 @@
   <meta name="description" content="A controlled synthetic storefront for the PerkPilot local demo.">
   <title>Demo Store · PerkPilot</title>
   <link rel="stylesheet" href="/store.css">
+  <link rel="stylesheet" href="/ios-theme.css">
   <script type="module" src="/store.js"></script>
 </head>
 <body>
-  <div class="demo-banner"><span class="demo-pill">DEMO STOREFRONT</span><span>Synthetic products & prices. No money moves.</span><a href="http://localhost:3000">Return to PerkPilot <span aria-hidden="true">↗</span></a></div>
+  <div class="demo-banner"><span class="demo-pill">Demo storefront</span><span>Synthetic products & prices. No money moves.</span><a href="http://localhost:3000">Return to PerkPilot <span aria-hidden="true">↗</span></a></div>
   <header class="store-header"><a id="merchant-wordmark" class="merchant-wordmark" href="/store?product=alo-jacket" aria-label="Alo demo store">alo</a><nav aria-label="Demo merchants"><a href="/store?product=alo-jacket" id="alo-link">Alo collection</a><a href="/store?product=nike-pegasus" id="nike-link">Nike running</a></nav><span class="bag">Your bag <span id="bag-quantity">1</span></span></header>
   <main>
     <p class="breadcrumbs"><a href="http://localhost:3000">PerkPilot</a><span>/</span><span id="breadcrumb-merchant">Demo collection</span><span>/</span><span id="breadcrumb-name">Product</span></p>
     <p id="store-status" role="status" aria-live="polite">Loading the controlled catalog…</p>
     <section class="product-layout" id="product-layout" hidden>
       <div class="product-visual" id="product-visual">
-        <div class="visual-topline"><span id="collection-label">THE EVERYDAY COLLECTION</span><span>01 / 02</span></div>
+        <div class="visual-topline"><span id="collection-label">The everyday collection</span><span>01 / 02</span></div>
         <svg id="jacket-art" class="product-art" viewBox="0 0 600 620" role="img" aria-label="Illustration of a sand performance jacket">
           <defs><linearGradient id="jacket-body" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#ddd3c0"/><stop offset=".5" stop-color="#c8bca5"/><stop offset="1" stop-color="#b8a98d"/></linearGradient><linearGradient id="jacket-sleeve" x1="0" x2="1"><stop stop-color="#cbbda4"/><stop offset="1" stop-color="#e1d6c1"/></linearGradient><filter id="jacket-shadow"><feDropShadow dx="0" dy="22" stdDeviation="17" flood-color="#47513e" flood-opacity=".2"/></filter></defs>
           <ellipse cx="300" cy="530" rx="165" ry="18" fill="#8b967d" opacity=".1"/>
@@ -29,7 +30,7 @@
         <div class="visual-caption"><span id="visual-caption">Considered design.<br>Everyday movement.</span><span class="circle-arrow" aria-hidden="true">↗</span></div>
       </div>
       <div class="product-detail">
-        <p class="eyebrow" id="product-category">THE EVERYDAY COLLECTION</p>
+        <p class="eyebrow" id="product-category">The everyday collection</p>
         <h1 id="product-name">Everyday performance jacket</h1>
         <p class="product-subtitle" id="product-description">A thoughtfully chosen addition to your everyday routine.</p>
         <div class="price-row"><strong id="product-price">$104.00</strong><s id="product-reference">$130.00</s><span class="sale-badge" id="product-discount">20% off</span></div>

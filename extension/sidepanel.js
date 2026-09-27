@@ -109,7 +109,7 @@ async function readCart() {
   const changed = !currentCart || cartFingerprint(cart) !== cartFingerprint(currentCart);
   guard.update(tab.id, cart);
   currentCart = cart;
-  $('merchant').textContent = `${cart.merchantId === 'alo' ? 'ALO' : 'NIKE'} · CONTROLLED DEMO`;
+  $('merchant').textContent = `${cart.merchantId === 'alo' ? 'Alo' : 'Nike'} · controlled demo`;
   $('product').textContent = cart.productId === 'alo-jacket' ? 'Alo Running Jacket' : 'Nike Pegasus Running Shoes';
   $('cart-total').textContent = money(cart.merchandiseCents + cart.shippingCents + cart.taxCents);
   $('cart-detail').textContent = `${cart.quantity} ${cart.quantity === 1 ? 'item' : 'items'} · ${money(cart.shippingCents)} shipping · ${money(cart.taxCents)} tax`;
